@@ -230,19 +230,19 @@ impl Message {
     /// Whether the top-level message is signed.
     #[getter]
     fn is_signed(&self) -> bool {
-        self.kind() == "signed"
+        self.info.kind.as_str() == "signed"
     }
 
     /// Whether the top-level message is compressed.
     #[getter]
     fn is_compressed(&self) -> bool {
-        self.kind() == "compressed"
+        self.info.kind.as_str() == "compressed"
     }
 
     /// Whether the top-level message is literal data.
     #[getter]
     fn is_literal(&self) -> bool {
-        self.kind() == "literal"
+        self.info.kind.as_str() == "literal"
     }
 
     /// Read the inner payload as bytes, automatically decompressing nested compressed layers.

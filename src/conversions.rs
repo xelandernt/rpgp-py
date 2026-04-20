@@ -76,44 +76,42 @@ pub(crate) fn dsa_key_size_from_bits(bits: u32) -> PyResult<PgpDsaKeySize> {
 pub(crate) fn symmetric_algorithms_from_names(
     values: Vec<String>,
 ) -> PyResult<SmallVec<[SymmetricKeyAlgorithm; 8]>> {
-    let mut algorithms = SmallVec::new();
-    for value in values {
-        algorithms.push(symmetric_algorithm_from_name(&value)?);
-    }
-    Ok(algorithms)
+    values
+        .into_iter()
+        .map(|value| symmetric_algorithm_from_name(&value))
+        .collect()
 }
 
 pub(crate) fn hash_algorithms_from_names(
     values: Vec<String>,
 ) -> PyResult<SmallVec<[HashAlgorithm; 8]>> {
-    let mut algorithms = SmallVec::new();
-    for value in values {
-        algorithms.push(hash_algorithm_from_name(&value)?);
-    }
-    Ok(algorithms)
+    values
+        .into_iter()
+        .map(|value| hash_algorithm_from_name(&value))
+        .collect()
 }
 
 pub(crate) fn compression_algorithms_from_names(
     values: Vec<String>,
 ) -> PyResult<SmallVec<[CompressionAlgorithm; 8]>> {
-    let mut algorithms = SmallVec::new();
-    for value in values {
-        algorithms.push(required_compression_algorithm_from_name(&value)?);
-    }
-    Ok(algorithms)
+    values
+        .into_iter()
+        .map(|value| required_compression_algorithm_from_name(&value))
+        .collect()
 }
 
 pub(crate) fn aead_algorithm_preferences_from_names(
     values: Vec<(String, String)>,
 ) -> PyResult<SmallVec<[(SymmetricKeyAlgorithm, AeadAlgorithm); 4]>> {
-    let mut algorithms = SmallVec::new();
-    for (symmetric_algorithm, aead_algorithm) in values {
-        algorithms.push((
-            symmetric_algorithm_from_name(&symmetric_algorithm)?,
-            aead_algorithm_from_name(&aead_algorithm)?,
-        ));
-    }
-    Ok(algorithms)
+    values
+        .into_iter()
+        .map(|(symmetric_algorithm, aead_algorithm)| {
+            Ok((
+                symmetric_algorithm_from_name(&symmetric_algorithm)?,
+                aead_algorithm_from_name(&aead_algorithm)?,
+            ))
+        })
+        .collect()
 }
 
 pub(crate) fn curve_name(curve: &ECCCurve) -> &'static str {

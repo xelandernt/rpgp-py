@@ -41,6 +41,22 @@ macro_rules! encrypt_to_recipient {
     }};
 }
 
+macro_rules! configure_message_builder {
+    ($builder:expr, $compression:expr, $session_key:expr, $symmetric_algorithm:expr) => {{
+        if let Some(compression) = $compression {
+            $builder.compression(compression);
+        }
+        if let Some(session_key) = $session_key {
+            $builder
+                .set_session_key(raw_session_key_from_bytes(
+                    session_key,
+                    $symmetric_algorithm,
+                )?)
+                .map_err(to_py_err)?;
+        }
+    }};
+}
+
 fn signer_entries_from_python(
     py: Python<'_>,
     signers: Vec<Py<SecretKey>>,
@@ -391,17 +407,7 @@ pub(crate) fn encrypt_message_to_recipient_bytes(
             let mut builder =
                 MessageBuilder::from_reader(file_name.to_string(), Cursor::new(data.to_vec()))
                     .seipd_v1(rand::thread_rng(), symmetric_algorithm);
-            if let Some(compression) = compression {
-                builder.compression(compression);
-            }
-            if let Some(session_key) = session_key {
-                builder
-                    .set_session_key(raw_session_key_from_bytes(
-                        session_key,
-                        symmetric_algorithm,
-                    )?)
-                    .map_err(to_py_err)?;
-            }
+            configure_message_builder!(builder, compression, session_key, symmetric_algorithm);
             encrypt_to_recipient!(builder, &recipient.inner, anonymous_recipient);
             builder.to_vec(rand::thread_rng()).map_err(to_py_err)
         }
@@ -414,17 +420,7 @@ pub(crate) fn encrypt_message_to_recipient_bytes(
                         aead_algorithm,
                         ChunkSize::default(),
                     );
-            if let Some(compression) = compression {
-                builder.compression(compression);
-            }
-            if let Some(session_key) = session_key {
-                builder
-                    .set_session_key(raw_session_key_from_bytes(
-                        session_key,
-                        symmetric_algorithm,
-                    )?)
-                    .map_err(to_py_err)?;
-            }
+            configure_message_builder!(builder, compression, session_key, symmetric_algorithm);
             encrypt_to_recipient!(builder, &recipient.inner, anonymous_recipient);
             builder.to_vec(rand::thread_rng()).map_err(to_py_err)
         }
@@ -465,17 +461,7 @@ pub(crate) fn encrypt_message_to_recipient(
             let mut builder =
                 MessageBuilder::from_reader(file_name.to_string(), Cursor::new(data.to_vec()))
                     .seipd_v1(rand::thread_rng(), symmetric_algorithm);
-            if let Some(compression) = compression {
-                builder.compression(compression);
-            }
-            if let Some(session_key) = session_key {
-                builder
-                    .set_session_key(raw_session_key_from_bytes(
-                        session_key,
-                        symmetric_algorithm,
-                    )?)
-                    .map_err(to_py_err)?;
-            }
+            configure_message_builder!(builder, compression, session_key, symmetric_algorithm);
             encrypt_to_recipient!(builder, &recipient.inner, anonymous_recipient);
             builder
                 .to_armored_string(rand::thread_rng(), ArmorOptions::default())
@@ -490,17 +476,7 @@ pub(crate) fn encrypt_message_to_recipient(
                         aead_algorithm,
                         ChunkSize::default(),
                     );
-            if let Some(compression) = compression {
-                builder.compression(compression);
-            }
-            if let Some(session_key) = session_key {
-                builder
-                    .set_session_key(raw_session_key_from_bytes(
-                        session_key,
-                        symmetric_algorithm,
-                    )?)
-                    .map_err(to_py_err)?;
-            }
+            configure_message_builder!(builder, compression, session_key, symmetric_algorithm);
             encrypt_to_recipient!(builder, &recipient.inner, anonymous_recipient);
             builder
                 .to_armored_string(rand::thread_rng(), ArmorOptions::default())
@@ -548,17 +524,7 @@ pub(crate) fn encrypt_message_to_recipients_bytes(
             let mut builder =
                 MessageBuilder::from_reader(file_name.to_string(), Cursor::new(data.to_vec()))
                     .seipd_v1(rand::thread_rng(), symmetric_algorithm);
-            if let Some(compression) = compression {
-                builder.compression(compression);
-            }
-            if let Some(session_key) = session_key {
-                builder
-                    .set_session_key(raw_session_key_from_bytes(
-                        session_key,
-                        symmetric_algorithm,
-                    )?)
-                    .map_err(to_py_err)?;
-            }
+            configure_message_builder!(builder, compression, session_key, symmetric_algorithm);
             for recipient in &recipients {
                 encrypt_to_recipient!(builder, recipient, anonymous_recipient);
             }
@@ -573,17 +539,7 @@ pub(crate) fn encrypt_message_to_recipients_bytes(
                         aead_algorithm,
                         ChunkSize::default(),
                     );
-            if let Some(compression) = compression {
-                builder.compression(compression);
-            }
-            if let Some(session_key) = session_key {
-                builder
-                    .set_session_key(raw_session_key_from_bytes(
-                        session_key,
-                        symmetric_algorithm,
-                    )?)
-                    .map_err(to_py_err)?;
-            }
+            configure_message_builder!(builder, compression, session_key, symmetric_algorithm);
             for recipient in &recipients {
                 encrypt_to_recipient!(builder, recipient, anonymous_recipient);
             }
@@ -631,17 +587,7 @@ pub(crate) fn encrypt_message_to_recipients(
             let mut builder =
                 MessageBuilder::from_reader(file_name.to_string(), Cursor::new(data.to_vec()))
                     .seipd_v1(rand::thread_rng(), symmetric_algorithm);
-            if let Some(compression) = compression {
-                builder.compression(compression);
-            }
-            if let Some(session_key) = session_key {
-                builder
-                    .set_session_key(raw_session_key_from_bytes(
-                        session_key,
-                        symmetric_algorithm,
-                    )?)
-                    .map_err(to_py_err)?;
-            }
+            configure_message_builder!(builder, compression, session_key, symmetric_algorithm);
             for recipient in &recipients {
                 encrypt_to_recipient!(builder, recipient, anonymous_recipient);
             }
@@ -658,17 +604,7 @@ pub(crate) fn encrypt_message_to_recipients(
                         aead_algorithm,
                         ChunkSize::default(),
                     );
-            if let Some(compression) = compression {
-                builder.compression(compression);
-            }
-            if let Some(session_key) = session_key {
-                builder
-                    .set_session_key(raw_session_key_from_bytes(
-                        session_key,
-                        symmetric_algorithm,
-                    )?)
-                    .map_err(to_py_err)?;
-            }
+            configure_message_builder!(builder, compression, session_key, symmetric_algorithm);
             for recipient in &recipients {
                 encrypt_to_recipient!(builder, recipient, anonymous_recipient);
             }
@@ -712,17 +648,7 @@ pub(crate) fn encrypt_message_with_password_bytes(
             let mut builder =
                 MessageBuilder::from_reader(file_name.to_string(), Cursor::new(data.to_vec()))
                     .seipd_v1(rand::thread_rng(), symmetric_algorithm);
-            if let Some(compression) = compression {
-                builder.compression(compression);
-            }
-            if let Some(session_key) = session_key {
-                builder
-                    .set_session_key(raw_session_key_from_bytes(
-                        session_key,
-                        symmetric_algorithm,
-                    )?)
-                    .map_err(to_py_err)?;
-            }
+            configure_message_builder!(builder, compression, session_key, symmetric_algorithm);
             builder
                 .encrypt_with_password(PgpStringToKey::new_default(rand::thread_rng()), &password)
                 .map_err(to_py_err)?;
@@ -737,17 +663,7 @@ pub(crate) fn encrypt_message_with_password_bytes(
                         aead_algorithm,
                         ChunkSize::default(),
                     );
-            if let Some(compression) = compression {
-                builder.compression(compression);
-            }
-            if let Some(session_key) = session_key {
-                builder
-                    .set_session_key(raw_session_key_from_bytes(
-                        session_key,
-                        symmetric_algorithm,
-                    )?)
-                    .map_err(to_py_err)?;
-            }
+            configure_message_builder!(builder, compression, session_key, symmetric_algorithm);
             builder
                 .encrypt_with_password(
                     rand::thread_rng(),
@@ -793,17 +709,7 @@ pub(crate) fn encrypt_message_with_password(
             let mut builder =
                 MessageBuilder::from_reader(file_name.to_string(), Cursor::new(data.to_vec()))
                     .seipd_v1(rand::thread_rng(), symmetric_algorithm);
-            if let Some(compression) = compression {
-                builder.compression(compression);
-            }
-            if let Some(session_key) = session_key {
-                builder
-                    .set_session_key(raw_session_key_from_bytes(
-                        session_key,
-                        symmetric_algorithm,
-                    )?)
-                    .map_err(to_py_err)?;
-            }
+            configure_message_builder!(builder, compression, session_key, symmetric_algorithm);
             builder
                 .encrypt_with_password(PgpStringToKey::new_default(rand::thread_rng()), &password)
                 .map_err(to_py_err)?;
@@ -820,17 +726,7 @@ pub(crate) fn encrypt_message_with_password(
                         aead_algorithm,
                         ChunkSize::default(),
                     );
-            if let Some(compression) = compression {
-                builder.compression(compression);
-            }
-            if let Some(session_key) = session_key {
-                builder
-                    .set_session_key(raw_session_key_from_bytes(
-                        session_key,
-                        symmetric_algorithm,
-                    )?)
-                    .map_err(to_py_err)?;
-            }
+            configure_message_builder!(builder, compression, session_key, symmetric_algorithm);
             builder
                 .encrypt_with_password(
                     rand::thread_rng(),
