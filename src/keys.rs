@@ -1,8 +1,15 @@
 use crate::conversions::*;
+use crate::hierarchy::{
+    PublicKeyPacket, SecretKeyPacket, SignedKeyDetails, SignedPublicSubKey as PySignedPublicSubKey,
+    SignedSecretSubKey as PySignedSecretSubKey, public_key_packet_object, public_params_object,
+    secret_key_packet_object, signed_key_details_from_raw, signed_public_subkey_from_raw,
+    signed_secret_subkey_from_raw,
+};
 use crate::info::*;
 use crate::key_params::*;
 use crate::serialization::*;
 use crate::*;
+use pyo3::types::PyAny;
 
 /// A transferable OpenPGP public key (certificate) as defined by RFC 9580.
 #[pyclass(module = "openpgp")]
@@ -59,7 +66,13 @@ impl PublicKey {
 
     /// Structured algorithm-specific public-key metadata from `KeyDetails.public_params()`.
     #[getter]
-    fn public_params(&self) -> PublicParamsInfo {
+    fn public_params(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        public_params_object(py, self.inner.primary_key.public_params())
+    }
+
+    /// Structured algorithm-specific public-key metadata from `KeyDetails.public_params()`.
+    #[getter]
+    fn public_params_info(&self) -> PublicParamsInfo {
         public_params_info_from_params(self.inner.primary_key.public_params())
     }
 
@@ -75,6 +88,28 @@ impl PublicKey {
     #[getter]
     fn public_subkey_count(&self) -> usize {
         self.inner.public_subkeys.len()
+    }
+
+    /// The primary key packet.
+    #[getter]
+    fn primary_key(&self, py: Python<'_>) -> PyResult<Py<PublicKeyPacket>> {
+        public_key_packet_object(py, &self.inner.primary_key)
+    }
+
+    /// Shared key details, user bindings, and direct signatures.
+    #[getter]
+    fn details(&self) -> SignedKeyDetails {
+        signed_key_details_from_raw(&self.inner.details)
+    }
+
+    /// The bound public subkeys.
+    #[getter]
+    fn public_subkeys(&self, py: Python<'_>) -> PyResult<Vec<PySignedPublicSubKey>> {
+        self.inner
+            .public_subkeys
+            .iter()
+            .map(|subkey| signed_public_subkey_from_raw(py, subkey))
+            .collect()
     }
 
     /// UTF-8 decoded user IDs, with invalid octets replaced lossily.
@@ -209,7 +244,13 @@ impl SecretKey {
 
     /// Structured algorithm-specific public-key metadata from `KeyDetails.public_params()`.
     #[getter]
-    fn public_params(&self) -> PublicParamsInfo {
+    fn public_params(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        public_params_object(py, self.inner.primary_key.public_params())
+    }
+
+    /// Structured algorithm-specific public-key metadata from `KeyDetails.public_params()`.
+    #[getter]
+    fn public_params_info(&self) -> PublicParamsInfo {
         public_params_info_from_params(self.inner.primary_key.public_params())
     }
 
@@ -231,6 +272,38 @@ impl SecretKey {
     #[getter]
     fn secret_subkey_count(&self) -> usize {
         self.inner.secret_subkeys.len()
+    }
+
+    /// The primary secret-key packet.
+    #[getter]
+    fn primary_key(&self, py: Python<'_>) -> PyResult<Py<SecretKeyPacket>> {
+        secret_key_packet_object(py, &self.inner.primary_key)
+    }
+
+    /// Shared key details, user bindings, and direct signatures.
+    #[getter]
+    fn details(&self) -> SignedKeyDetails {
+        signed_key_details_from_raw(&self.inner.details)
+    }
+
+    /// Public subkeys explicitly carried in the secret key.
+    #[getter]
+    fn public_subkeys(&self, py: Python<'_>) -> PyResult<Vec<PySignedPublicSubKey>> {
+        self.inner
+            .public_subkeys
+            .iter()
+            .map(|subkey| signed_public_subkey_from_raw(py, subkey))
+            .collect()
+    }
+
+    /// Secret subkeys carried in the secret key.
+    #[getter]
+    fn secret_subkeys(&self, py: Python<'_>) -> PyResult<Vec<PySignedSecretSubKey>> {
+        self.inner
+            .secret_subkeys
+            .iter()
+            .map(|subkey| signed_secret_subkey_from_raw(py, subkey))
+            .collect()
     }
 
     /// UTF-8 decoded user IDs, with invalid octets replaced lossily.

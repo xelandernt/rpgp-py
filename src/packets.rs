@@ -3,6 +3,7 @@ use crate::info::*;
 use crate::key_params::*;
 use crate::serialization::*;
 use crate::*;
+use pyo3::types::PyAny;
 
 pub(crate) fn pkesk_version_number(version: pgp::types::PkeskVersion) -> u8 {
     match version {
@@ -180,7 +181,7 @@ impl SymKeyEncryptedSessionKeyPacket {
     }
 }
 
-#[pyclass(module = "openpgp")]
+#[pyclass(subclass, module = "openpgp")]
 #[derive(Clone)]
 pub(crate) struct EncryptedDataPacket {
     pub(crate) kind: String,
@@ -193,6 +194,18 @@ pub(crate) struct EncryptedDataPacket {
     pub(crate) data: Vec<u8>,
     pub(crate) packet_bytes: Vec<u8>,
 }
+
+#[pyclass(extends = EncryptedDataPacket, module = "openpgp")]
+#[derive(Clone)]
+pub(crate) struct SymEncryptedDataPacket;
+
+#[pyclass(extends = EncryptedDataPacket, module = "openpgp")]
+#[derive(Clone)]
+pub(crate) struct SymEncryptedProtectedDataPacket;
+
+#[pyclass(extends = EncryptedDataPacket, module = "openpgp")]
+#[derive(Clone)]
+pub(crate) struct GnupgAeadDataPacket;
 
 pub(crate) fn encrypted_data_packet_from_packet(
     packet: PgpPacket,
@@ -269,6 +282,31 @@ pub(crate) fn encrypted_data_packet_from_packet(
             })
         }
         _ => Err(to_py_err("expected an encrypted data packet")),
+    }
+}
+
+pub(crate) fn encrypted_data_packet_object(
+    py: Python<'_>,
+    packet: EncryptedDataPacket,
+) -> PyResult<Py<PyAny>> {
+    let kind = packet.kind.clone();
+
+    match kind.as_str() {
+        "sed" => Ok(Py::new(
+            py,
+            PyClassInitializer::from(packet).add_subclass(SymEncryptedDataPacket),
+        )?
+        .into_any()),
+        "gnupg-aead" => Ok(Py::new(
+            py,
+            PyClassInitializer::from(packet).add_subclass(GnupgAeadDataPacket),
+        )?
+        .into_any()),
+        _ => Ok(Py::new(
+            py,
+            PyClassInitializer::from(packet).add_subclass(SymEncryptedProtectedDataPacket),
+        )?
+        .into_any()),
     }
 }
 

@@ -12,6 +12,7 @@ Python bindings for [`rPGP`](https://github.com/rpgp/rpgp), exposed as the `open
 - a typed Python surface (`.pyi` stubs ship with the package),
 - wheels for Python 3.10+,
 - high-level helpers for common signing/encryption workflows,
+- a Python class graph that tracks the underlying `pgp` crate more closely for keys, messages, packet variants, and public parameters,
 - detailed inspection APIs for packets, signatures, key bindings, and generated key material.
 
 ## Why use `rpgp-py` instead of `PGPy` or `PGPy13`?
@@ -19,7 +20,7 @@ Python bindings for [`rPGP`](https://github.com/rpgp/rpgp), exposed as the `open
 Broadly:
 
 - **RFC 9580 coverage:** `rpgp-py` follows the Rust `pgp` crate, which targets newer OpenPGP work such as RFC 9580-compatible v6 key material and modern curves/packet handling. `PGPy` and `PGPy13` are still RFC 4880.
-- **Rust core:** the cryptographic core is implemented in Rust and exposed through a Python-first API.
+- **Rust core:** the cryptographic core is implemented in Rust and exposed through a Rust-backed Python API that mirrors the upstream object graph much more closely.
 - **Typed builders and inspectors:** the package exposes typed builders for key generation plus rich metadata for self-signatures, key flags, features, user bindings, S2K settings, and public-key parameters.
 - **Python 3.13 support:** `PGPy` still imports `imghdr`, which was removed from the standard library in Python 3.13. `PGPy13` exists as a compatibility fork; `rpgp-py` targets current Python directly.
 
@@ -37,6 +38,15 @@ When you need the underlying Rust semantics or want to compare behaviour against
 - [`pgp` crate API docs on docs.rs](https://docs.rs/pgp/latest/pgp/)
 - [RFC 9580](https://www.rfc-editor.org/rfc/rfc9580)
 
+## API shape
+
+The public package keeps the old inspector helpers, but its core object graph now lines up with the upstream `pgp` crate much more closely:
+
+- `PublicKey` / `SecretKey` mirror `SignedPublicKey` / `SignedSecretKey` and expose `primary_key`, `details`, `public_subkeys`, and `secret_subkeys`.
+- `Message.from_armor()` / `Message.from_bytes()` return the appropriate message variant class: `LiteralMessage`, `CompressedMessage`, `SignedMessage`, or `EncryptedMessage`.
+- `EncryptedMessage` exposes `esk` and `edata` in addition to the compatibility helper methods.
+- `public_params` returns a typed variant object such as `RsaPublicParams`, `EcdsaPublicParams`, `EcdhPublicParams`, `Ed25519PublicParams`, or `X25519PublicParams`; supplemental inspector metadata remains available as `public_params_info`.
+
 ## Use cases
 
 ### 1. Parse and inspect transferable keys
@@ -46,11 +56,14 @@ from openpgp import PublicKey, SecretKey
 
 public_key, _ = PublicKey.from_armor(public_key_armor)
 public_key.verify_bindings()
+assert public_key.primary_key.fingerprint == public_key.fingerprint
+assert public_key.details.users == []
+assert len(public_key.public_subkeys) >= 0
 
 secret_key, _ = SecretKey.from_armor(secret_key_armor)
 assert secret_key.to_public_key().fingerprint == public_key.fingerprint
-assert public_key.public_subkey_count >= 0
-assert secret_key.secret_subkey_count >= 0
+assert len(secret_key.public_subkeys) >= 0
+assert len(secret_key.secret_subkeys) >= 0
 ```
 
 ### 2. Sign and verify messages and detached signatures
@@ -116,10 +129,18 @@ assert multi_message.signature_count() == 2
 Recipient encryption:
 
 ```python
-from openpgp import Message, encrypt_message_to_recipient, encrypt_message_to_recipients
+from openpgp import (
+    EncryptedMessage,
+    Message,
+    SymEncryptedProtectedDataPacket,
+    encrypt_message_to_recipient,
+    encrypt_message_to_recipients,
+)
 
 recipient_encrypted = encrypt_message_to_recipient(b"secret", public_key)
 recipient_message, _ = Message.from_armor(recipient_encrypted)
+assert isinstance(recipient_message, EncryptedMessage)
+assert isinstance(recipient_message.edata, SymEncryptedProtectedDataPacket)
 recipient_decrypted = recipient_message.decrypt(secret_key)
 assert recipient_decrypted.payload_bytes() == b"secret"
 
@@ -150,11 +171,7 @@ assert password_decrypted.payload_text() == "secret"
 Binary output, packet access, and caller-supplied session keys:
 
 ```python
-from openpgp import (
-    Message,
-    encrypt_message_to_recipient_bytes,
-    encrypt_session_key_to_recipient,
-)
+from openpgp import EncryptedMessage, Message, encrypt_message_to_recipient_bytes, encrypt_session_key_to_recipient
 
 session_key = bytes(range(16))
 message_bytes = encrypt_message_to_recipient_bytes(
@@ -166,8 +183,9 @@ message_bytes = encrypt_message_to_recipient_bytes(
 )
 
 message = Message.from_bytes(message_bytes)
-pkesk = message.public_key_encrypted_session_key_packets()[0]
-edata = message.encrypted_data_packet()
+assert isinstance(message, EncryptedMessage)
+pkesk = message.esk[0]
+edata = message.edata
 
 assert pkesk.recipient_is_anonymous is False
 assert edata.kind == "seipd-v2"
@@ -186,6 +204,7 @@ assert raw_pkesk
 
 ```python
 from openpgp import (
+    Ed25519PublicParams,
     EncryptionCaps,
     KeyType,
     Message,
@@ -193,6 +212,7 @@ from openpgp import (
     SecretKeyParamsBuilder,
     SubkeyParamsBuilder,
     UserAttribute,
+    X25519PublicParams,
     encrypt_message_to_recipient,
     sign_message,
 )
@@ -230,8 +250,8 @@ public_key.verify_bindings()
 
 assert secret_key.version == 6
 assert public_key.public_key_algorithm == "ed25519"
-assert public_key.public_params.kind == "ed25519"
-assert public_key.public_params.curve == "ed25519"
+assert isinstance(public_key.public_params, Ed25519PublicParams)
+assert isinstance(public_key.public_subkeys[0].key.public_params, X25519PublicParams)
 assert public_key.packet_version == PacketHeaderVersion.new()
 
 signed = sign_message(b"generated payload", secret_key)

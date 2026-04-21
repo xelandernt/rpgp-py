@@ -6,15 +6,31 @@ import pytest
 
 from openpgp import (
     CleartextSignedMessage,
+    DecryptedLiteralMessage,
     DetachedSignature,
+    Ed25519PublicParams,
+    EncryptedMessage,
     EncryptionCaps,
     KeyType,
     Message,
+    PublicKeyEncryptedSessionKeyPacket,
+    PublicKeyPacket,
+    PublicSubkeyPacket,
     PublicKey,
     SecretKey,
+    SecretKeyPacket,
     SecretKeyParamsBuilder,
     SignatureInfo,
+    SignedKeyDetails,
+    SignedMessage,
+    SignedPublicKey,
+    SignedPublicSubKey,
+    SignedSecretKey,
+    SignedSecretSubKey,
     SubkeyParamsBuilder,
+    SymEncryptedProtectedDataPacket,
+    X25519PublicParams,
+    SecretSubkeyPacket,
     encrypt_message_to_recipient_bytes,
     encrypt_message_to_recipient,
     encrypt_message_to_recipients_bytes,
@@ -164,6 +180,63 @@ def test_round_trip_public_key_armor() -> None:
 
     assert headers == {}
     assert reparsed.fingerprint == key.fingerprint
+
+
+def test_key_object_graph_mirrors_signed_key_structure() -> None:
+    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    public_key = secret_key.to_public_key()
+
+    assert isinstance(public_key, SignedPublicKey)
+    assert isinstance(secret_key, SignedSecretKey)
+
+    assert isinstance(public_key.primary_key, PublicKeyPacket)
+    assert public_key.primary_key.fingerprint == public_key.fingerprint
+    assert isinstance(public_key.primary_key.public_params, Ed25519PublicParams)
+
+    assert isinstance(public_key.details, SignedKeyDetails)
+    assert public_key.details.users == []
+    assert len(public_key.public_subkeys) == 1
+    assert isinstance(public_key.public_subkeys[0], SignedPublicSubKey)
+    assert isinstance(public_key.public_subkeys[0].key, PublicSubkeyPacket)
+
+    assert isinstance(secret_key.primary_key, SecretKeyPacket)
+    assert secret_key.primary_key.fingerprint == secret_key.fingerprint
+    assert isinstance(secret_key.primary_key.public_params, Ed25519PublicParams)
+    assert secret_key.primary_key.secret_s2k.usage == "unprotected"
+
+    assert len(secret_key.public_subkeys) == 0
+    assert len(secret_key.secret_subkeys) == 1
+    assert isinstance(secret_key.secret_subkeys[0], SignedSecretSubKey)
+    assert isinstance(secret_key.secret_subkeys[0].key, SecretSubkeyPacket)
+    assert isinstance(
+        secret_key.secret_subkeys[0].key.public_params, X25519PublicParams
+    )
+    assert (
+        secret_key.secret_subkeys[0].signed_public_key().key.fingerprint
+        == public_key.public_subkeys[0].key.fingerprint
+    )
+
+
+def test_message_hierarchy_exposes_message_and_packet_variants() -> None:
+    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    public_key = secret_key.to_public_key()
+
+    signed_message, _ = Message.from_armor(sign_message(b"hierarchy", secret_key))
+    assert isinstance(signed_message, SignedMessage)
+
+    encrypted_message = Message.from_bytes(
+        encrypt_message_to_recipient_bytes(b"packet payload", public_key)
+    )
+
+    assert isinstance(encrypted_message, EncryptedMessage)
+    assert len(encrypted_message.esk) == 1
+    assert isinstance(encrypted_message.esk[0], PublicKeyEncryptedSessionKeyPacket)
+    assert isinstance(encrypted_message.edata, SymEncryptedProtectedDataPacket)
+    assert encrypted_message.edata.kind == "seipd-v2"
+
+    decrypted = encrypted_message.decrypt(secret_key)
+    assert isinstance(decrypted, DecryptedLiteralMessage)
+    assert decrypted.payload_bytes() == b"packet payload"
 
 
 def test_sign_and_verify_message() -> None:

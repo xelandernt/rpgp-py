@@ -4,20 +4,61 @@ use crate::keys::*;
 use crate::packets::*;
 use crate::serialization::*;
 use crate::*;
+use pyo3::types::PyAny;
 
 /// A parsed OpenPGP message.
 ///
 /// The message may be literal, compressed, signed, or encrypted.
-#[pyclass(module = "openpgp")]
+#[pyclass(subclass, module = "openpgp")]
 #[derive(Clone)]
 pub(crate) struct Message {
     pub(crate) source: Vec<u8>,
     pub(crate) info: MessageInfo,
 }
 
-pub(crate) fn owned_message_from_source(source: Vec<u8>) -> PyResult<Message> {
+#[pyclass(extends = Message, module = "openpgp")]
+#[derive(Clone)]
+pub(crate) struct LiteralMessage;
+
+#[pyclass(extends = Message, module = "openpgp")]
+#[derive(Clone)]
+pub(crate) struct CompressedMessage;
+
+#[pyclass(extends = Message, module = "openpgp")]
+#[derive(Clone)]
+pub(crate) struct SignedMessage;
+
+#[pyclass(extends = Message, module = "openpgp")]
+#[derive(Clone)]
+pub(crate) struct EncryptedMessage;
+
+pub(crate) fn message_object_from_source(py: Python<'_>, source: Vec<u8>) -> PyResult<Py<PyAny>> {
     let info = inspect_message_from_source(&source).map_err(to_py_err)?;
-    Ok(Message { source, info })
+    let base = Message { source, info };
+
+    match base.info.kind.as_str() {
+        "literal" => Ok(Py::new(
+            py,
+            PyClassInitializer::from(base).add_subclass(LiteralMessage),
+        )?
+        .into_any()),
+        "compressed" => Ok(Py::new(
+            py,
+            PyClassInitializer::from(base).add_subclass(CompressedMessage),
+        )?
+        .into_any()),
+        "signed" => Ok(Py::new(
+            py,
+            PyClassInitializer::from(base).add_subclass(SignedMessage),
+        )?
+        .into_any()),
+        "encrypted" => Ok(Py::new(
+            py,
+            PyClassInitializer::from(base).add_subclass(EncryptedMessage),
+        )?
+        .into_any()),
+        _ => Err(to_py_err("unknown message kind")),
+    }
 }
 
 pub(crate) fn decrypted_message_from_parsed(
@@ -186,22 +227,19 @@ pub(crate) fn cleartext_signed_message_from_signers(
 impl Message {
     /// Parse an ASCII-armored OpenPGP message.
     #[staticmethod]
-    fn from_armor(data: &str) -> PyResult<(Self, Headers)> {
+    fn from_armor(py: Python<'_>, data: &str) -> PyResult<(Py<PyAny>, Headers)> {
         let info = inspect_message_from_source(data.as_bytes()).map_err(to_py_err)?;
         let headers = info.headers.clone().unwrap_or_default();
         Ok((
-            Self {
-                source: data.as_bytes().to_vec(),
-                info,
-            },
+            message_object_from_source(py, data.as_bytes().to_vec())?,
             headers,
         ))
     }
 
     /// Parse a binary OpenPGP message.
     #[staticmethod]
-    fn from_bytes(data: &[u8]) -> PyResult<Self> {
-        owned_message_from_source(data.to_vec())
+    fn from_bytes(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyAny>> {
+        message_object_from_source(py, data.to_vec())
     }
 
     /// Return the message as binary OpenPGP packet bytes.
@@ -309,10 +347,10 @@ impl Message {
     }
 
     /// Return the top-level encrypted data packet on an encrypted message.
-    fn encrypted_data_packet(&self) -> PyResult<EncryptedDataPacket> {
+    fn encrypted_data_packet(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let (_, _, encrypted_data_packet) =
             top_level_encryption_packets_from_source(&self.source, &self.info.headers)?;
-        Ok(encrypted_data_packet)
+        encrypted_data_packet_object(py, encrypted_data_packet)
     }
 
     /// Verify a specific signature on the message and return its metadata.
@@ -341,28 +379,29 @@ impl Message {
     #[pyo3(signature = (key, password=None))]
     fn decrypt(
         &self,
+        py: Python<'_>,
         key: PyRef<'_, SecretKey>,
         password: Option<&str>,
-    ) -> PyResult<DecryptedMessage> {
+    ) -> PyResult<Py<PyAny>> {
         let key_password = password_from_option(password);
         let (message, _) = parse_message(&self.source).map_err(to_py_err)?;
         let decrypted = message
             .decrypt(&key_password, &key.inner)
             .map_err(to_py_err)?;
-        decrypted_message_from_parsed(decrypted)
+        decrypted_message_object(py, decrypted_message_from_parsed(decrypted)?)
     }
 
     /// Decrypt an encrypted message using a message password.
     ///
     /// The returned :class:`DecryptedMessage` preserves signature-inspection helpers for any
     /// signed payload revealed by decryption.
-    fn decrypt_with_password(&self, password: &str) -> PyResult<DecryptedMessage> {
+    fn decrypt_with_password(&self, py: Python<'_>, password: &str) -> PyResult<Py<PyAny>> {
         let message_password = Password::from(password);
         let (message, _) = parse_message(&self.source).map_err(to_py_err)?;
         let decrypted = message
             .decrypt_with_password(&message_password)
             .map_err(to_py_err)?;
-        decrypted_message_from_parsed(decrypted)
+        decrypted_message_object(py, decrypted_message_from_parsed(decrypted)?)
     }
 
     /// Decrypt an encrypted message with a raw session key.
@@ -373,9 +412,10 @@ impl Message {
     #[pyo3(signature = (session_key, symmetric_algorithm=None))]
     fn decrypt_with_session_key(
         &self,
+        py: Python<'_>,
         session_key: &[u8],
         symmetric_algorithm: Option<&str>,
-    ) -> PyResult<DecryptedMessage> {
+    ) -> PyResult<Py<PyAny>> {
         let plain_session_key = plain_session_key_from_message_source(
             &self.source,
             &self.info.headers,
@@ -386,7 +426,7 @@ impl Message {
         let decrypted = message
             .decrypt_with_session_key(plain_session_key)
             .map_err(to_py_err)?;
-        decrypted_message_from_parsed(decrypted)
+        decrypted_message_object(py, decrypted_message_from_parsed(decrypted)?)
     }
 
     fn __repr__(&self) -> String {
@@ -397,11 +437,39 @@ impl Message {
     }
 }
 
+#[pymethods]
+impl EncryptedMessage {
+    #[getter]
+    fn esk(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        let base: PyRef<'_, Message> = slf.into_super();
+        let (public_key_packets, symmetric_key_packets, _) =
+            top_level_encryption_packets_from_source(&base.source, &base.info.headers)?;
+
+        let mut packets =
+            Vec::with_capacity(public_key_packets.len() + symmetric_key_packets.len());
+        for packet in public_key_packets {
+            packets.push(Py::new(py, packet)?.into_any());
+        }
+        for packet in symmetric_key_packets {
+            packets.push(Py::new(py, packet)?.into_any());
+        }
+        Ok(packets)
+    }
+
+    #[getter]
+    fn edata(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let base: PyRef<'_, Message> = slf.into_super();
+        let (_, _, encrypted_data_packet) =
+            top_level_encryption_packets_from_source(&base.source, &base.info.headers)?;
+        encrypted_data_packet_object(py, encrypted_data_packet)
+    }
+}
+
 /// A decrypted OpenPGP message with eagerly extracted payload, metadata, and signatures.
 ///
 /// The decrypted payload is materialized once so Python code can continue inspecting or verifying
 /// signed content that was revealed by decryption.
-#[pyclass(module = "openpgp")]
+#[pyclass(subclass, module = "openpgp")]
 #[derive(Clone)]
 pub(crate) struct DecryptedMessage {
     pub(crate) kind: String,
@@ -413,6 +481,42 @@ pub(crate) struct DecryptedMessage {
     pub(crate) literal_mode: Option<String>,
     pub(crate) literal_filename: Option<Vec<u8>>,
     pub(crate) signatures: Vec<DecryptedSignature>,
+}
+
+#[pyclass(extends = DecryptedMessage, module = "openpgp")]
+#[derive(Clone)]
+pub(crate) struct DecryptedLiteralMessage;
+
+#[pyclass(extends = DecryptedMessage, module = "openpgp")]
+#[derive(Clone)]
+pub(crate) struct DecryptedCompressedMessage;
+
+#[pyclass(extends = DecryptedMessage, module = "openpgp")]
+#[derive(Clone)]
+pub(crate) struct DecryptedSignedMessage;
+
+pub(crate) fn decrypted_message_object(
+    py: Python<'_>,
+    message: DecryptedMessage,
+) -> PyResult<Py<PyAny>> {
+    match message.kind.as_str() {
+        "literal" => Ok(Py::new(
+            py,
+            PyClassInitializer::from(message).add_subclass(DecryptedLiteralMessage),
+        )?
+        .into_any()),
+        "compressed" => Ok(Py::new(
+            py,
+            PyClassInitializer::from(message).add_subclass(DecryptedCompressedMessage),
+        )?
+        .into_any()),
+        "signed" => Ok(Py::new(
+            py,
+            PyClassInitializer::from(message).add_subclass(DecryptedSignedMessage),
+        )?
+        .into_any()),
+        _ => Ok(Py::new(py, message)?.into_any()),
+    }
 }
 
 #[pymethods]

@@ -5,11 +5,16 @@ from typing import Final, Literal, NamedTuple
 import pytest
 
 from openpgp import (
+    EcdhPublicParams,
+    EcdsaPublicParams,
+    Ed25519PublicParams,
+    EdDsaLegacyPublicParams,
     EncryptionCaps,
     KeyType,
     Message,
     PacketHeaderVersion,
     PublicKey,
+    RsaPublicParams,
     SecretKey,
     SecretKeyParamsBuilder,
     SignatureInfo,
@@ -17,6 +22,7 @@ from openpgp import (
     StringToKey,
     SubkeyParamsBuilder,
     UserAttribute,
+    X25519PublicParams,
     encrypt_message_to_recipient,
     sign_message,
 )
@@ -172,6 +178,83 @@ def test_generate_ed25519_x25519_key_roundtrips(version: KeyVersion) -> None:
     encrypted_message, _ = Message.from_armor(encrypted)
     decrypted = encrypted_message.decrypt(reparsed_secret)
     assert decrypted.payload_bytes() == b"hello world"
+
+
+def test_public_params_variants_follow_underlying_algorithm_families() -> None:
+    modern_secret = (
+        build_modern_signing_key(6)
+        .subkey(
+            SubkeyParamsBuilder()
+            .version(6)
+            .key_type(KeyType.x25519())
+            .can_encrypt(EncryptionCaps.all())
+            .build()
+        )
+        .build()
+        .generate()
+    )
+    modern_public = modern_secret.to_public_key()
+    assert isinstance(modern_secret.public_params, Ed25519PublicParams)
+    assert isinstance(modern_public.public_params, Ed25519PublicParams)
+    assert isinstance(
+        modern_secret.secret_subkeys[0].key.public_params, X25519PublicParams
+    )
+    assert isinstance(
+        modern_public.public_subkeys[0].key.public_params, X25519PublicParams
+    )
+
+    ecdsa_secret = (
+        SecretKeyParamsBuilder()
+        .version(6)
+        .key_type(KeyType.ecdsa("p256"))
+        .can_certify(True)
+        .can_sign(True)
+        .primary_user_id("alice")
+        .subkey(
+            SubkeyParamsBuilder()
+            .version(6)
+            .key_type(KeyType.ecdh("p256"))
+            .can_encrypt(EncryptionCaps.all())
+            .build()
+        )
+        .build()
+        .generate()
+    )
+    assert isinstance(ecdsa_secret.public_params, EcdsaPublicParams)
+    assert isinstance(
+        ecdsa_secret.secret_subkeys[0].key.public_params, EcdhPublicParams
+    )
+
+    legacy_secret = (
+        SecretKeyParamsBuilder()
+        .key_type(KeyType.ed25519_legacy())
+        .can_certify(False)
+        .can_sign(True)
+        .primary_user_id("Me <me@example.com>")
+        .preferred_symmetric_algorithms(["aes128"])
+        .preferred_hash_algorithms(["sha256"])
+        .preferred_compression_algorithms([])
+        .subkey(
+            SubkeyParamsBuilder()
+            .key_type(KeyType.ecdh("curve25519"))
+            .can_encrypt(EncryptionCaps.all())
+            .build()
+        )
+        .build()
+        .generate()
+    )
+    assert isinstance(legacy_secret.public_params, EdDsaLegacyPublicParams)
+
+    rsa_secret = (
+        SecretKeyParamsBuilder()
+        .key_type(KeyType.rsa(2048))
+        .can_certify(True)
+        .can_sign(True)
+        .primary_user_id("alice")
+        .build()
+        .generate()
+    )
+    assert isinstance(rsa_secret.public_params, RsaPublicParams)
 
 
 def test_generate_legacy_curve25519_key_matches_docs_example() -> None:
