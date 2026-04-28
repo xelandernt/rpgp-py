@@ -5,8 +5,15 @@ use crate::packets::*;
 use crate::serialization::*;
 use crate::*;
 use pgp::{
-    packet::SubpacketData,
+    packet::{
+        PublicKey as PgpPublicKeyPacket, PublicSubkey as PgpPublicSubkeyPacket, SubpacketData,
+    },
     types::{Fingerprint, VerifyingKey},
+};
+use std::{
+    fs::File,
+    io::{BufReader, Read},
+    path::PathBuf,
 };
 
 /// A parsed OpenPGP message.
@@ -27,6 +34,23 @@ pub(crate) fn owned_message_from_source(source: Vec<u8>) -> PyResult<Message> {
 enum SelectedVerifier<'a> {
     Primary(&'a SignedPublicKey),
     Subkey(&'a SignedPublicSubKey),
+}
+
+enum OwnedVerifier {
+    Primary(PgpPublicKeyPacket),
+    Subkey(PgpPublicSubkeyPacket),
+}
+
+impl OwnedVerifier {
+    fn verify_signature_reader<R>(&self, signature: &Signature, data: R) -> PyResult<()>
+    where
+        R: Read,
+    {
+        match self {
+            Self::Primary(key) => signature.verify(key, data).map_err(to_py_err),
+            Self::Subkey(subkey) => signature.verify(subkey, data).map_err(to_py_err),
+        }
+    }
 }
 
 impl SelectedVerifier<'_> {
@@ -763,6 +787,26 @@ impl DetachedSignature {
     fn verify_signature(&self, key: PyRef<'_, PublicKey>, data: &[u8]) -> PyResult<SignatureInfo> {
         self.verify(key, data)?;
         Ok(self.signature_info())
+    }
+
+    /// Verify a detached signature against a public key by streaming the payload from a file.
+    fn verify_file(
+        &self,
+        py: Python<'_>,
+        key: PyRef<'_, PublicKey>,
+        path: PathBuf,
+    ) -> PyResult<()> {
+        let selected_verifier = select_verifier_for_signature(&key.inner, &self.inner.signature)?;
+        // Subkey bindings are verified before SelectedVerifier::Subkey is returned.
+        let verifier = match selected_verifier {
+            SelectedVerifier::Primary(key) => OwnedVerifier::Primary(key.primary_key.clone()),
+            SelectedVerifier::Subkey(subkey) => OwnedVerifier::Subkey(subkey.key.clone()),
+        };
+        let signature = self.inner.signature.clone();
+        py.detach(move || {
+            let file = File::open(path).map_err(to_py_err)?;
+            verifier.verify_signature_reader(&signature, BufReader::new(file))
+        })
     }
 
     /// Verify a detached text signature against UTF-8 text.

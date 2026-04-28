@@ -305,6 +305,52 @@ def test_detached_signature_verifies_when_made_by_signing_subkey() -> None:
     assert public_key.fingerprint not in info.issuer_fingerprints
 
 
+def test_detached_signature_verifies_streamed_file(tmp_path: Path) -> None:
+    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    public_key = secret_key.to_public_key()
+    payload = b"streamed payload" * 4096
+
+    signature = DetachedSignature.sign_binary(payload, secret_key)
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(payload)
+
+    signature.verify_file(public_key, artifact)
+    signature.verify_file(public_key, str(artifact))
+
+
+def test_detached_signature_verify_file_works_with_signing_subkey() -> None:
+    public_key = load_public_key_fixture("subkey-signed-1/cert.asc")
+    signature, _ = DetachedSignature.from_armor(
+        read_fixture_text("subkey-signed-1/sig.asc")
+    )
+
+    signature.verify_file(public_key, FIXTURES / "subkey-signed-1/payload.bin")
+
+
+def test_detached_signature_verify_file_fails_against_wrong_key() -> None:
+    wrong_public_key = load_public_key_fixture("ed25519-cv25519-sample-1.asc")
+    signature, _ = DetachedSignature.from_armor(
+        read_fixture_text("subkey-signed-1/sig.asc")
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="does not match the certificate primary key or any bound public subkey",
+    ):
+        signature.verify_file(
+            wrong_public_key, FIXTURES / "subkey-signed-1/payload.bin"
+        )
+
+
+def test_detached_signature_verify_file_raises_for_missing_path(tmp_path: Path) -> None:
+    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    public_key = secret_key.to_public_key()
+    signature = DetachedSignature.sign_binary(b"x", secret_key)
+
+    with pytest.raises(ValueError, match="No such file"):
+        signature.verify_file(public_key, tmp_path / "does-not-exist.bin")
+
+
 def test_detached_signature_fails_against_unrelated_certificate() -> None:
     wrong_public_key = load_public_key_fixture("ed25519-cv25519-sample-1.asc")
     payload = (FIXTURES / "subkey-signed-1/payload.bin").read_bytes()
