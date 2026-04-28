@@ -809,6 +809,17 @@ impl DetachedSignature {
         })
     }
 
+    /// Verify a detached signature streamed from a file and return its metadata.
+    fn verify_file_signature(
+        &self,
+        py: Python<'_>,
+        key: PyRef<'_, PublicKey>,
+        path: PathBuf,
+    ) -> PyResult<SignatureInfo> {
+        self.verify_file(py, key, path)?;
+        Ok(self.signature_info())
+    }
+
     /// Verify a detached text signature against UTF-8 text.
     ///
     /// Text verification normalizes line endings, matching the semantics of text signatures.

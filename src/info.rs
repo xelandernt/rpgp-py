@@ -972,6 +972,7 @@ impl PublicParamsInfo {
         self.curve_bits
     }
 
+    /// The encoded DSA prime size in bits, when this key uses DSA public parameters.
     #[getter]
     fn dsa_bits(&self) -> Option<u32> {
         self.dsa_bits

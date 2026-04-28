@@ -316,6 +316,10 @@ def test_detached_signature_verifies_streamed_file(tmp_path: Path) -> None:
 
     signature.verify_file(public_key, artifact)
     signature.verify_file(public_key, str(artifact))
+    info = signature.verify_file_signature(public_key, artifact)
+
+    assert info.signature_type == "binary"
+    assert info.hash_algorithm == "SHA256"
 
 
 def test_detached_signature_verify_file_works_with_signing_subkey() -> None:
