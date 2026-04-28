@@ -238,6 +238,7 @@ pub(crate) fn empty_public_params_info(kind: &str) -> PublicParamsInfo {
         curve_oid: None,
         curve_alias: None,
         curve_bits: None,
+        dsa_bits: None,
         rsa_bits: None,
         secret_key_length: None,
         is_supported: None,
@@ -262,6 +263,9 @@ pub(crate) fn public_params_info_from_params(params: &PgpPublicParams) -> Public
     match params {
         PgpPublicParams::RSA(params) => {
             info.rsa_bits = u32::try_from(params.key.n().bits()).ok();
+        }
+        PgpPublicParams::DSA(params) => {
+            info.dsa_bits = u32::try_from(params.key.components().p().bits()).ok();
         }
         PgpPublicParams::ECDSA(params) => match params {
             PgpEcdsaPublicParams::P256 { .. } => {
@@ -927,6 +931,7 @@ pub(crate) struct PublicParamsInfo {
     pub(crate) curve_oid: Option<String>,
     pub(crate) curve_alias: Option<String>,
     pub(crate) curve_bits: Option<u16>,
+    pub(crate) dsa_bits: Option<u32>,
     pub(crate) rsa_bits: Option<u32>,
     pub(crate) secret_key_length: Option<usize>,
     pub(crate) is_supported: Option<bool>,
@@ -965,6 +970,11 @@ impl PublicParamsInfo {
     #[getter]
     fn curve_bits(&self) -> Option<u16> {
         self.curve_bits
+    }
+
+    #[getter]
+    fn dsa_bits(&self) -> Option<u32> {
+        self.dsa_bits
     }
 
     /// The encoded RSA modulus size in bits, when this key uses RSA public parameters.

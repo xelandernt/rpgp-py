@@ -379,6 +379,34 @@ def test_legacy_curve25519_public_params_expose_curve_metadata() -> None:
     assert reparsed_public.subkey_bindings()[0].public_params.curve == "curve25519"
 
 
+def test_dsa_public_params_expose_prime_size_for_generated_and_parsed_keys() -> None:
+    secret_key = (
+        SecretKeyParamsBuilder()
+        .created_at(FIXED_PRIMARY_CREATED_AT)
+        .key_type(KeyType.dsa(1024))
+        .can_certify(True)
+        .can_sign(True)
+        .primary_user_id("alice")
+        .build()
+        .generate()
+    )
+    public_key = secret_key.to_public_key()
+
+    for key in (secret_key, public_key):
+        params = key.public_params
+        assert params.kind == "dsa"
+        assert params.dsa_bits == 1024
+        assert params.rsa_bits is None
+        assert params.curve is None
+        assert params.curve_bits is None
+        assert params.secret_key_length is None
+
+    reparsed_secret, _ = SecretKey.from_armor(secret_key.to_armored())
+    reparsed_public, _ = PublicKey.from_armor(public_key.to_armored())
+    assert reparsed_secret.public_params.dsa_bits == 1024
+    assert reparsed_public.public_params.dsa_bits == 1024
+
+
 def test_rsa_public_params_expose_modulus_size_for_generated_and_parsed_keys() -> None:
     secret_key = (
         SecretKeyParamsBuilder()
@@ -396,6 +424,7 @@ def test_rsa_public_params_expose_modulus_size_for_generated_and_parsed_keys() -
         params = key.public_params
         assert params.kind == "rsa"
         assert params.rsa_bits == 2048
+        assert params.dsa_bits is None
         assert params.curve is None
         assert params.curve_bits is None
         assert params.secret_key_length is None
