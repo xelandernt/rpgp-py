@@ -731,11 +731,64 @@ impl DetachedSignature {
         Ok((Self { inner }, headers))
     }
 
+    /// Parse multiple ASCII-armored detached signatures from one armored input.
+    #[staticmethod]
+    fn from_armor_many(data: &str) -> PyResult<(Vec<Self>, Headers)> {
+        let (iter, headers) = PgpDetachedSignature::from_string_many(data).map_err(to_py_err)?;
+        let signatures = iter
+            .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok((signatures, headers))
+    }
+
     /// Parse a binary detached signature.
     #[staticmethod]
     fn from_bytes(data: &[u8]) -> PyResult<Self> {
         let inner = PgpDetachedSignature::from_bytes(Cursor::new(data)).map_err(to_py_err)?;
         Ok(Self { inner })
+    }
+
+    /// Parse multiple binary detached signatures from concatenated packet bytes.
+    #[staticmethod]
+    fn from_bytes_many(data: &[u8]) -> PyResult<Vec<Self>> {
+        PgpDetachedSignature::from_bytes_many(Cursor::new(data))
+            .map_err(to_py_err)?
+            .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
+            .collect()
+    }
+
+    /// Parse a single binary detached signature from a file.
+    #[staticmethod]
+    fn from_file(path: PathBuf) -> PyResult<Self> {
+        let inner = PgpDetachedSignature::from_file(&path).map_err(to_py_err)?;
+        Ok(Self { inner })
+    }
+
+    /// Parse multiple binary detached signatures from a file of concatenated packet bytes.
+    #[staticmethod]
+    fn from_file_many(path: PathBuf) -> PyResult<Vec<Self>> {
+        PgpDetachedSignature::from_file_many(&path)
+            .map_err(to_py_err)?
+            .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
+            .collect()
+    }
+
+    /// Parse a single ASCII-armored detached signature from a file.
+    #[staticmethod]
+    fn from_armor_file(path: PathBuf) -> PyResult<(Self, Headers)> {
+        let (inner, headers) = PgpDetachedSignature::from_armor_file(&path).map_err(to_py_err)?;
+        Ok((Self { inner }, headers))
+    }
+
+    /// Parse multiple ASCII-armored detached signatures from one armored file.
+    #[staticmethod]
+    fn from_armor_file_many(path: PathBuf) -> PyResult<(Vec<Self>, Headers)> {
+        let (iter, headers) =
+            PgpDetachedSignature::from_armor_file_many(&path).map_err(to_py_err)?;
+        let signatures = iter
+            .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok((signatures, headers))
     }
 
     /// Create a detached binary signature using the selected hash algorithm.

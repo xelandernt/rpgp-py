@@ -32,10 +32,20 @@ from openpgp import (
 
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+MULTI_OBJECT_DESERIALIZATION_FIXTURES = FIXTURES / "multi-object-deserialization"
+BUNDLED_KEY_FINGERPRINTS = [
+    "d1a66e1a23b182c9980f788cfbfcc82a015e7330",
+    "cb186c4f0609a697e4d52dfa6c722b0c1f1e27c18a56708f6525ec27bad9acc9",
+]
+BUNDLED_SIGNATURE_HASH_ALGORITHMS = ["SHA256", "SHA512"]
 
 
 def read_fixture_text(name: str) -> str:
     return (FIXTURES / name).read_text()
+
+
+def read_fixture_bytes(name: str) -> bytes:
+    return (FIXTURES / name).read_bytes()
 
 
 class OpenPGPInteropDecryptCase(TypedDict):
@@ -166,6 +176,84 @@ def test_round_trip_public_key_armor() -> None:
     assert reparsed.fingerprint == key.fingerprint
 
 
+def test_key_deserializers_support_many_and_file_inputs() -> None:
+    public_armor = (
+        MULTI_OBJECT_DESERIALIZATION_FIXTURES / "public-keys.asc"
+    ).read_text()
+    public_bytes = (
+        MULTI_OBJECT_DESERIALIZATION_FIXTURES / "public-keys.pgp"
+    ).read_bytes()
+    secret_armor = (
+        MULTI_OBJECT_DESERIALIZATION_FIXTURES / "secret-keys.asc"
+    ).read_text()
+    secret_bytes = (
+        MULTI_OBJECT_DESERIALIZATION_FIXTURES / "secret-keys.pgp"
+    ).read_bytes()
+
+    public_keys, public_headers = PublicKey.from_armor_many(public_armor)
+    assert public_headers == {}
+    assert [key.fingerprint for key in public_keys] == BUNDLED_KEY_FINGERPRINTS
+    assert [key.fingerprint for key in PublicKey.from_bytes_many(public_bytes)] == (
+        BUNDLED_KEY_FINGERPRINTS
+    )
+
+    secret_keys, secret_headers = SecretKey.from_armor_many(secret_armor)
+    assert secret_headers == {}
+    assert [key.fingerprint for key in secret_keys] == BUNDLED_KEY_FINGERPRINTS
+    assert [key.fingerprint for key in SecretKey.from_bytes_many(secret_bytes)] == (
+        BUNDLED_KEY_FINGERPRINTS
+    )
+
+    assert (
+        PublicKey.from_file(
+            MULTI_OBJECT_DESERIALIZATION_FIXTURES / "public-keys.pgp"
+        ).fingerprint
+        == BUNDLED_KEY_FINGERPRINTS[0]
+    )
+    assert (
+        SecretKey.from_file(
+            MULTI_OBJECT_DESERIALIZATION_FIXTURES / "secret-keys.pgp"
+        ).fingerprint
+        == BUNDLED_KEY_FINGERPRINTS[0]
+    )
+    assert (
+        PublicKey.from_armor_file(
+            MULTI_OBJECT_DESERIALIZATION_FIXTURES / "public-keys.asc"
+        )[0].fingerprint
+        == BUNDLED_KEY_FINGERPRINTS[0]
+    )
+    assert (
+        SecretKey.from_armor_file(
+            MULTI_OBJECT_DESERIALIZATION_FIXTURES / "secret-keys.asc"
+        )[0].fingerprint
+        == BUNDLED_KEY_FINGERPRINTS[0]
+    )
+    assert [
+        key.fingerprint
+        for key in PublicKey.from_file_many(
+            MULTI_OBJECT_DESERIALIZATION_FIXTURES / "public-keys.pgp"
+        )
+    ] == BUNDLED_KEY_FINGERPRINTS
+    assert [
+        key.fingerprint
+        for key in SecretKey.from_file_many(
+            MULTI_OBJECT_DESERIALIZATION_FIXTURES / "secret-keys.pgp"
+        )
+    ] == BUNDLED_KEY_FINGERPRINTS
+    assert [
+        key.fingerprint
+        for key in PublicKey.from_armor_file_many(
+            MULTI_OBJECT_DESERIALIZATION_FIXTURES / "public-keys.asc"
+        )[0]
+    ] == BUNDLED_KEY_FINGERPRINTS
+    assert [
+        key.fingerprint
+        for key in SecretKey.from_armor_file_many(
+            MULTI_OBJECT_DESERIALIZATION_FIXTURES / "secret-keys.asc"
+        )[0]
+    ] == BUNDLED_KEY_FINGERPRINTS
+
+
 def test_sign_and_verify_message() -> None:
     secret_key, _ = SecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
@@ -258,6 +346,69 @@ def test_sign_and_verify_detached_signature() -> None:
     armored_signature, headers = DetachedSignature.from_armor(signature.to_armored())
     assert headers == {}
     armored_signature.verify(public_key, payload)
+
+
+def test_detached_signature_deserializers_support_many_and_file_inputs() -> None:
+    payload = (MULTI_OBJECT_DESERIALIZATION_FIXTURES / "payload.bin").read_bytes()
+    public_keys = PublicKey.from_bytes_many(
+        (MULTI_OBJECT_DESERIALIZATION_FIXTURES / "public-keys.pgp").read_bytes()
+    )
+    assert [key.fingerprint for key in public_keys] == BUNDLED_KEY_FINGERPRINTS
+
+    armored_signatures, headers = DetachedSignature.from_armor_many(
+        (MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.asc").read_text()
+    )
+    assert headers == {}
+    assert [
+        signature.signature_info().hash_algorithm for signature in armored_signatures
+    ] == BUNDLED_SIGNATURE_HASH_ALGORITHMS
+    assert [
+        signature.signature_info().issuer_fingerprints[0]
+        for signature in armored_signatures
+    ] == BUNDLED_KEY_FINGERPRINTS
+    for signature, public_key in zip(armored_signatures, public_keys):
+        signature.verify(public_key, payload)
+
+    binary_signatures = DetachedSignature.from_bytes_many(
+        (MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.pgp").read_bytes()
+    )
+    assert [
+        signature.signature_info().hash_algorithm for signature in binary_signatures
+    ] == BUNDLED_SIGNATURE_HASH_ALGORITHMS
+    for signature, public_key in zip(binary_signatures, public_keys):
+        signature.verify(public_key, payload)
+
+    assert (
+        DetachedSignature.from_file(
+            MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.pgp"
+        )
+        .signature_info()
+        .hash_algorithm
+        == "SHA256"
+    )
+    assert (
+        DetachedSignature.from_armor_file(
+            MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.asc"
+        )[0]
+        .signature_info()
+        .hash_algorithm
+        == "SHA256"
+    )
+
+    for signature, public_key in zip(
+        DetachedSignature.from_file_many(
+            MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.pgp"
+        ),
+        public_keys,
+    ):
+        signature.verify(public_key, payload)
+    for signature, public_key in zip(
+        DetachedSignature.from_armor_file_many(
+            MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.asc"
+        )[0],
+        public_keys,
+    ):
+        signature.verify(public_key, payload)
 
 
 def test_detached_signature_supports_custom_hash_algorithm_for_binary_signatures() -> (

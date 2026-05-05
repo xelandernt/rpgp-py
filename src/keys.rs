@@ -3,6 +3,7 @@ use crate::info::*;
 use crate::key_params::*;
 use crate::serialization::*;
 use crate::*;
+use std::path::PathBuf;
 
 /// A transferable OpenPGP public key (certificate) as defined by RFC 9580.
 #[pyclass(module = "openpgp", from_py_object)]
@@ -20,11 +21,63 @@ impl PublicKey {
         Ok((Self { inner }, headers))
     }
 
+    /// Parse multiple ASCII-armored transferable public keys from one armored input.
+    #[staticmethod]
+    fn from_armor_many(data: &str) -> PyResult<(Vec<Self>, Headers)> {
+        let (iter, headers) = SignedPublicKey::from_string_many(data).map_err(to_py_err)?;
+        let keys = iter
+            .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok((keys, headers))
+    }
+
     /// Parse a binary transferable public key.
     #[staticmethod]
     fn from_bytes(data: &[u8]) -> PyResult<Self> {
         let inner = SignedPublicKey::from_bytes(Cursor::new(data)).map_err(to_py_err)?;
         Ok(Self { inner })
+    }
+
+    /// Parse multiple binary transferable public keys from concatenated packet bytes.
+    #[staticmethod]
+    fn from_bytes_many(data: &[u8]) -> PyResult<Vec<Self>> {
+        SignedPublicKey::from_bytes_many(Cursor::new(data))
+            .map_err(to_py_err)?
+            .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
+            .collect()
+    }
+
+    /// Parse a single binary transferable public key from a file.
+    #[staticmethod]
+    fn from_file(path: PathBuf) -> PyResult<Self> {
+        let inner = SignedPublicKey::from_file(&path).map_err(to_py_err)?;
+        Ok(Self { inner })
+    }
+
+    /// Parse multiple binary transferable public keys from a file of concatenated packet bytes.
+    #[staticmethod]
+    fn from_file_many(path: PathBuf) -> PyResult<Vec<Self>> {
+        SignedPublicKey::from_file_many(&path)
+            .map_err(to_py_err)?
+            .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
+            .collect()
+    }
+
+    /// Parse a single ASCII-armored transferable public key from a file.
+    #[staticmethod]
+    fn from_armor_file(path: PathBuf) -> PyResult<(Self, Headers)> {
+        let (inner, headers) = SignedPublicKey::from_armor_file(&path).map_err(to_py_err)?;
+        Ok((Self { inner }, headers))
+    }
+
+    /// Parse multiple ASCII-armored transferable public keys from one armored file.
+    #[staticmethod]
+    fn from_armor_file_many(path: PathBuf) -> PyResult<(Vec<Self>, Headers)> {
+        let (iter, headers) = SignedPublicKey::from_armor_file_many(&path).map_err(to_py_err)?;
+        let keys = iter
+            .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok((keys, headers))
     }
 
     /// The RFC 9580 fingerprint of the primary key.
@@ -162,11 +215,63 @@ impl SecretKey {
         Ok((Self { inner }, headers))
     }
 
+    /// Parse multiple ASCII-armored transferable secret keys from one armored input.
+    #[staticmethod]
+    fn from_armor_many(data: &str) -> PyResult<(Vec<Self>, Headers)> {
+        let (iter, headers) = SignedSecretKey::from_string_many(data).map_err(to_py_err)?;
+        let keys = iter
+            .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok((keys, headers))
+    }
+
     /// Parse a binary transferable secret key.
     #[staticmethod]
     fn from_bytes(data: &[u8]) -> PyResult<Self> {
         let inner = SignedSecretKey::from_bytes(Cursor::new(data)).map_err(to_py_err)?;
         Ok(Self { inner })
+    }
+
+    /// Parse multiple binary transferable secret keys from concatenated packet bytes.
+    #[staticmethod]
+    fn from_bytes_many(data: &[u8]) -> PyResult<Vec<Self>> {
+        SignedSecretKey::from_bytes_many(Cursor::new(data))
+            .map_err(to_py_err)?
+            .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
+            .collect()
+    }
+
+    /// Parse a single binary transferable secret key from a file.
+    #[staticmethod]
+    fn from_file(path: PathBuf) -> PyResult<Self> {
+        let inner = SignedSecretKey::from_file(&path).map_err(to_py_err)?;
+        Ok(Self { inner })
+    }
+
+    /// Parse multiple binary transferable secret keys from a file of concatenated packet bytes.
+    #[staticmethod]
+    fn from_file_many(path: PathBuf) -> PyResult<Vec<Self>> {
+        SignedSecretKey::from_file_many(&path)
+            .map_err(to_py_err)?
+            .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
+            .collect()
+    }
+
+    /// Parse a single ASCII-armored transferable secret key from a file.
+    #[staticmethod]
+    fn from_armor_file(path: PathBuf) -> PyResult<(Self, Headers)> {
+        let (inner, headers) = SignedSecretKey::from_armor_file(&path).map_err(to_py_err)?;
+        Ok((Self { inner }, headers))
+    }
+
+    /// Parse multiple ASCII-armored transferable secret keys from one armored file.
+    #[staticmethod]
+    fn from_armor_file_many(path: PathBuf) -> PyResult<(Vec<Self>, Headers)> {
+        let (iter, headers) = SignedSecretKey::from_armor_file_many(&path).map_err(to_py_err)?;
+        let keys = iter
+            .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok((keys, headers))
     }
 
     /// The RFC 9580 fingerprint of the primary key.
