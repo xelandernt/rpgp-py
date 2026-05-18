@@ -1,5 +1,5 @@
 from os import PathLike
-from typing import Dict, List, Literal, Optional, Tuple, TypeAlias, Union
+from typing import BinaryIO, Dict, List, Literal, Optional, TextIO, Tuple, TypeAlias, Union
 
 FilePath: TypeAlias = Union[str, PathLike[str]]
 Headers: TypeAlias = Dict[str, List[str]]
@@ -41,6 +41,7 @@ DsaKeySizeBits: TypeAlias = Literal[1024, 2048, 3072]
 KeyVersionNumber: TypeAlias = Literal[4, 6]
 AeadPreference: TypeAlias = Tuple[SymmetricAlgorithmName, AeadAlgorithmName]
 PacketHeaderVersionName: TypeAlias = Literal["old", "new"]
+LiteralDataModeName: TypeAlias = Literal["binary", "utf8"]
 PublicKeyAlgorithmName: TypeAlias = Literal[
     "rsa",
     "rsa-encrypt",
@@ -82,6 +83,8 @@ PublicParamsKindName: TypeAlias = Literal[
     "ed448",
     "unknown",
 ]
+EncryptionRecipient: TypeAlias = Union[PublicKey, PublicSubkey]
+SigningKey: TypeAlias = Union[SecretKey, SecretSubkey]
 
 class PacketHeaderVersion:
     @staticmethod
@@ -90,6 +93,15 @@ class PacketHeaderVersion:
     def new() -> PacketHeaderVersion: ...
     @property
     def name(self) -> PacketHeaderVersionName: ...
+
+class ArmorOptions:
+    def __init__(
+        self, headers: Optional[Headers] = None, include_checksum: bool = True
+    ) -> None: ...
+    @property
+    def headers(self) -> Optional[Headers]: ...
+    @property
+    def include_checksum(self) -> bool: ...
 
 class EncryptionCaps:
     @staticmethod
@@ -310,6 +322,8 @@ class PublicKey:
     @property
     def public_subkey_count(self) -> int: ...
     @property
+    def public_subkeys(self) -> List[PublicSubkey]: ...
+    @property
     def user_ids(self) -> List[str]: ...
     def direct_signature_infos(self) -> List[SignatureInfo]: ...
     def revocation_signature_infos(self) -> List[SignatureInfo]: ...
@@ -319,6 +333,25 @@ class PublicKey:
     def verify_bindings(self) -> None: ...
     def to_bytes(self) -> bytes: ...
     def to_armored(self) -> str: ...
+
+class PublicSubkey:
+    @property
+    def fingerprint(self) -> str: ...
+    @property
+    def key_id(self) -> str: ...
+    @property
+    def version(self) -> int: ...
+    @property
+    def created_at(self) -> int: ...
+    @property
+    def public_key_algorithm(self) -> PublicKeyAlgorithmName: ...
+    @property
+    def public_params(self) -> PublicParamsInfo: ...
+    @property
+    def packet_version(self) -> PacketHeaderVersion: ...
+    @property
+    def signatures(self) -> List[SignatureInfo]: ...
+    def to_bytes(self) -> bytes: ...
 
 class SecretKey:
     @staticmethod
@@ -354,7 +387,11 @@ class SecretKey:
     @property
     def public_subkey_count(self) -> int: ...
     @property
+    def public_subkeys(self) -> List[PublicSubkey]: ...
+    @property
     def secret_subkey_count(self) -> int: ...
+    @property
+    def secret_subkeys(self) -> List[SecretSubkey]: ...
     @property
     def user_ids(self) -> List[str]: ...
     def direct_signature_infos(self) -> List[SignatureInfo]: ...
@@ -368,6 +405,26 @@ class SecretKey:
     def to_public_key(self) -> PublicKey: ...
     def to_bytes(self) -> bytes: ...
     def to_armored(self) -> str: ...
+
+class SecretSubkey:
+    @property
+    def fingerprint(self) -> str: ...
+    @property
+    def key_id(self) -> str: ...
+    @property
+    def version(self) -> int: ...
+    @property
+    def created_at(self) -> int: ...
+    @property
+    def public_key_algorithm(self) -> PublicKeyAlgorithmName: ...
+    @property
+    def public_params(self) -> PublicParamsInfo: ...
+    @property
+    def packet_version(self) -> PacketHeaderVersion: ...
+    @property
+    def signatures(self) -> List[SignatureInfo]: ...
+    def signed_public_key(self) -> PublicSubkey: ...
+    def to_bytes(self) -> bytes: ...
 
 class KeyFlagsInfo:
     @property
@@ -554,6 +611,51 @@ class EncryptedDataPacket:
     def data(self) -> bytes: ...
     def to_bytes(self) -> bytes: ...
 
+class MessageBuilder:
+    @staticmethod
+    def from_bytes(name: str, data: bytes) -> MessageBuilder: ...
+    @staticmethod
+    def from_file(path: FilePath) -> MessageBuilder: ...
+    @staticmethod
+    def from_reader(file_name: str, reader: BinaryIO) -> MessageBuilder: ...
+    def compression(self, compression: CompressionAlgorithmName) -> MessageBuilder: ...
+    def data_mode(self, mode: LiteralDataModeName) -> MessageBuilder: ...
+    def sign_binary(self) -> MessageBuilder: ...
+    def sign_text(self) -> MessageBuilder: ...
+    def partial_chunk_size(self, size: int) -> MessageBuilder: ...
+    def seipd_v1(
+        self, symmetric_algorithm: SymmetricAlgorithmName
+    ) -> MessageBuilder: ...
+    def seipd_v2(
+        self,
+        symmetric_algorithm: SymmetricAlgorithmName,
+        aead_algorithm: AeadAlgorithmName,
+        chunk_size: Optional[int] = None,
+    ) -> MessageBuilder: ...
+    def set_session_key(self, session_key: bytes) -> MessageBuilder: ...
+    def sign(
+        self,
+        key: SigningKey,
+        password: Optional[str] = None,
+        hash_algorithm: HashAlgorithmName = "sha256",
+    ) -> MessageBuilder: ...
+    def encrypt_to_key(self, key: EncryptionRecipient) -> MessageBuilder: ...
+    def encrypt_to_key_anonymous(self, key: EncryptionRecipient) -> MessageBuilder: ...
+    def encrypt_with_password(
+        self, string_to_key: StringToKey, password: str
+    ) -> MessageBuilder: ...
+    def session_key(self) -> bytes: ...
+    def to_vec(self) -> bytes: ...
+    def to_writer(self, writer: BinaryIO) -> None: ...
+    def to_armored_string(self, opts: Optional[ArmorOptions] = None) -> str: ...
+    def to_armored_writer(
+        self, writer: TextIO, opts: Optional[ArmorOptions] = None
+    ) -> None: ...
+    def to_file(self, path: FilePath) -> None: ...
+    def to_armored_file(
+        self, path: FilePath, opts: Optional[ArmorOptions] = None
+    ) -> None: ...
+
 class Message:
     @staticmethod
     def from_armor(data: str) -> Tuple[Message, Headers]: ...
@@ -641,14 +743,14 @@ class DetachedSignature:
     @staticmethod
     def sign_binary(
         data: bytes,
-        key: SecretKey,
+        key: SigningKey,
         password: Optional[str] = None,
         hash_algorithm: HashAlgorithmName = "sha256",
     ) -> DetachedSignature: ...
     @staticmethod
     def sign_text(
         text: str,
-        key: SecretKey,
+        key: SigningKey,
         password: Optional[str] = None,
         hash_algorithm: HashAlgorithmName = "sha256",
     ) -> DetachedSignature: ...
@@ -668,7 +770,7 @@ class CleartextSignedMessage:
     @staticmethod
     def sign(
         text: str,
-        key: SecretKey,
+        key: SigningKey,
         password: Optional[str] = None,
         hash_algorithm: HashAlgorithmName = "sha256",
     ) -> CleartextSignedMessage: ...
@@ -695,33 +797,33 @@ def inspect_message(data: str) -> MessageInfo: ...
 def inspect_message_bytes(data: bytes) -> MessageInfo: ...
 def sign_message(
     data: bytes,
-    signer: SecretKey,
+    signer: SigningKey,
     password: Optional[str] = None,
     file_name: str = "",
     hash_algorithm: HashAlgorithmName = "sha256",
 ) -> str: ...
 def sign_message_many(
     data: bytes,
-    signers: List[SecretKey],
+    signers: List[SigningKey],
     passwords: Optional[List[Optional[str]]] = None,
     file_name: str = "",
     hash_algorithm: HashAlgorithmName = "sha256",
 ) -> str: ...
 def sign_cleartext_message(
     text: str,
-    signer: SecretKey,
+    signer: SigningKey,
     password: Optional[str] = None,
     hash_algorithm: HashAlgorithmName = "sha256",
 ) -> str: ...
 def sign_cleartext_message_many(
     text: str,
-    signers: List[SecretKey],
+    signers: List[SigningKey],
     passwords: Optional[List[Optional[str]]] = None,
     hash_algorithm: HashAlgorithmName = "sha256",
 ) -> str: ...
 def encrypt_session_key_to_recipient(
     session_key: bytes,
-    recipient: PublicKey,
+    recipient: EncryptionRecipient,
     version: EncryptionVersionName = "seipd-v2",
     symmetric_algorithm: SymmetricAlgorithmName = "aes256",
     anonymous_recipient: bool = False,
@@ -735,7 +837,7 @@ def encrypt_session_key_with_password(
 ) -> SymKeyEncryptedSessionKeyPacket: ...
 def encrypt_message_to_recipient_bytes(
     data: bytes,
-    recipient: PublicKey,
+    recipient: EncryptionRecipient,
     file_name: str = "",
     version: EncryptionVersionName = "seipd-v2",
     symmetric_algorithm: SymmetricAlgorithmName = "aes256",
@@ -746,7 +848,7 @@ def encrypt_message_to_recipient_bytes(
 ) -> bytes: ...
 def encrypt_message_to_recipients_bytes(
     data: bytes,
-    recipients: List[PublicKey],
+    recipients: List[EncryptionRecipient],
     file_name: str = "",
     version: EncryptionVersionName = "seipd-v2",
     symmetric_algorithm: SymmetricAlgorithmName = "aes256",
@@ -757,7 +859,7 @@ def encrypt_message_to_recipients_bytes(
 ) -> bytes: ...
 def encrypt_message_to_recipient(
     data: bytes,
-    recipient: PublicKey,
+    recipient: EncryptionRecipient,
     file_name: str = "",
     version: EncryptionVersionName = "seipd-v2",
     symmetric_algorithm: SymmetricAlgorithmName = "aes256",
@@ -768,7 +870,7 @@ def encrypt_message_to_recipient(
 ) -> str: ...
 def encrypt_message_to_recipients(
     data: bytes,
-    recipients: List[PublicKey],
+    recipients: List[EncryptionRecipient],
     file_name: str = "",
     version: EncryptionVersionName = "seipd-v2",
     symmetric_algorithm: SymmetricAlgorithmName = "aes256",

@@ -10,6 +10,7 @@ use pgp::{
     },
     types::{Fingerprint, VerifyingKey},
 };
+use pyo3::types::PyAny;
 use std::{
     fs::File,
     io::{BufReader, Read},
@@ -307,39 +308,25 @@ pub(crate) fn verify_message_signature_info(
 
 pub(crate) fn detached_binary_signature_from_data(
     data: &[u8],
-    key: &SignedSecretKey,
+    signer: &SecretSigner,
     password: &Password,
     hash_algorithm: HashAlgorithm,
 ) -> PyResult<PgpDetachedSignature> {
-    PgpDetachedSignature::sign_binary_data(
-        rand::thread_rng(),
-        &key.primary_key,
-        password,
-        hash_algorithm,
-        Cursor::new(data),
-    )
-    .map_err(to_py_err)
+    signer.detached_binary_signature(data, password, hash_algorithm)
 }
 
 pub(crate) fn detached_text_signature_from_text(
     text: &str,
-    key: &SignedSecretKey,
+    signer: &SecretSigner,
     password: &Password,
     hash_algorithm: HashAlgorithm,
 ) -> PyResult<PgpDetachedSignature> {
-    PgpDetachedSignature::sign_text_data(
-        rand::thread_rng(),
-        &key.primary_key,
-        password,
-        hash_algorithm,
-        Cursor::new(text.as_bytes()),
-    )
-    .map_err(to_py_err)
+    signer.detached_text_signature(text, password, hash_algorithm)
 }
 
 pub(crate) fn cleartext_signed_message_from_signers(
     text: &str,
-    signers: &[(SignedSecretKey, Password)],
+    signers: &[(SecretSigner, Password)],
     hash_algorithm: HashAlgorithm,
 ) -> PyResult<PgpCleartextSignedMessage> {
     if signers.is_empty() {
@@ -350,14 +337,7 @@ pub(crate) fn cleartext_signed_message_from_signers(
         signers
             .iter()
             .map(|(signer, password)| {
-                PgpDetachedSignature::sign_text_data(
-                    rand::thread_rng(),
-                    &signer.primary_key,
-                    password,
-                    hash_algorithm,
-                    Cursor::new(normalized_text.as_bytes()),
-                )
-                .map(|signature| signature.signature)
+                signer.cleartext_signature(normalized_text, password, hash_algorithm)
             })
             .collect()
     })
@@ -795,15 +775,16 @@ impl DetachedSignature {
     #[staticmethod]
     #[pyo3(signature = (data, key, password=None, hash_algorithm="sha256"))]
     fn sign_binary(
+        py: Python<'_>,
         data: &[u8],
-        key: PyRef<'_, SecretKey>,
+        key: Py<PyAny>,
         password: Option<&str>,
         hash_algorithm: &str,
     ) -> PyResult<Self> {
         let password = password_from_option(password);
         let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
-        let inner =
-            detached_binary_signature_from_data(data, &key.inner, &password, hash_algorithm)?;
+        let signer = secret_signer_from_python(py, key)?;
+        let inner = detached_binary_signature_from_data(data, &signer, &password, hash_algorithm)?;
         Ok(Self { inner })
     }
 
@@ -814,14 +795,16 @@ impl DetachedSignature {
     #[staticmethod]
     #[pyo3(signature = (text, key, password=None, hash_algorithm="sha256"))]
     fn sign_text(
+        py: Python<'_>,
         text: &str,
-        key: PyRef<'_, SecretKey>,
+        key: Py<PyAny>,
         password: Option<&str>,
         hash_algorithm: &str,
     ) -> PyResult<Self> {
         let password = password_from_option(password);
         let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
-        let inner = detached_text_signature_from_text(text, &key.inner, &password, hash_algorithm)?;
+        let signer = secret_signer_from_python(py, key)?;
+        let inner = detached_text_signature_from_text(text, &signer, &password, hash_algorithm)?;
         Ok(Self { inner })
     }
 
@@ -929,14 +912,16 @@ impl CleartextSignedMessage {
     #[staticmethod]
     #[pyo3(signature = (text, key, password=None, hash_algorithm="sha256"))]
     fn sign(
+        py: Python<'_>,
         text: &str,
-        key: PyRef<'_, SecretKey>,
+        key: Py<PyAny>,
         password: Option<&str>,
         hash_algorithm: &str,
     ) -> PyResult<Self> {
         let password = password_from_option(password);
         let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
-        let signers = vec![(key.inner.clone(), password)];
+        let signer = secret_signer_from_python(py, key)?;
+        let signers = vec![(signer, password)];
         let inner = cleartext_signed_message_from_signers(text, &signers, hash_algorithm)?;
         Ok(Self { inner })
     }

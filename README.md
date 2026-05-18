@@ -51,6 +51,14 @@ secret_key, _ = SecretKey.from_armor(secret_key_armor)
 assert secret_key.to_public_key().fingerprint == public_key.fingerprint
 assert public_key.public_subkey_count >= 0
 assert secret_key.secret_subkey_count >= 0
+
+if public_key.public_subkeys:
+    assert public_key.public_subkeys[0].fingerprint == public_key.subkey_bindings()[0].fingerprint
+if secret_key.secret_subkeys:
+    assert (
+        secret_key.secret_subkeys[0].signed_public_key().fingerprint
+        == secret_key.public_subkeys[0].fingerprint
+    )
 ```
 
 ### 2. Sign and verify messages and detached signatures
@@ -182,7 +190,65 @@ raw_pkesk = encrypt_session_key_to_recipient(
 assert raw_pkesk
 ```
 
-### 5. Generate modern RFC 9580-compatible key material
+### 5. Build messages with the upstream-style `MessageBuilder` API
+
+```python
+from openpgp import ArmorOptions, Message, MessageBuilder, StringToKey
+
+armored = (
+    MessageBuilder.from_bytes("hello.txt", b"Hello, world!")
+    .compression("zlib")
+    .seipd_v2("aes256", "ocb")
+    .encrypt_with_password(StringToKey.argon2(1, 4, 21), "hunter2")
+    .to_armored_string(
+        ArmorOptions({"Comment": ["built with MessageBuilder"]}, include_checksum=False)
+    )
+)
+
+message, headers = Message.from_armor(armored)
+decrypted = message.decrypt_with_password("hunter2")
+
+assert headers == {"Comment": ["built with MessageBuilder"]}
+assert decrypted.kind == "compressed"
+assert decrypted.payload_text() == "Hello, world!"
+assert "\n=" not in armored
+```
+
+The same builder surface also accepts operational subkey objects when you want the Rust docs' subkey-oriented examples to translate directly:
+
+```python
+subkey_signed_and_encrypted = (
+    MessageBuilder.from_bytes("hello.txt", b"Hello, world!")
+    .sign(secret_key.secret_subkeys[0])
+    .seipd_v2("aes256", "ocb")
+    .encrypt_to_key(public_key.public_subkeys[0])
+    .to_armored_string()
+)
+```
+
+It also exposes the remaining simple builder workflow methods for file-like objects and literal/signature mode selection:
+
+```python
+import io
+
+from openpgp import Message, MessageBuilder
+
+writer = io.StringIO()
+
+(
+    MessageBuilder.from_reader("notes.txt", io.BytesIO(b"hello\r\nworld\r\n"))
+    .data_mode("utf8")
+    .sign_text()
+    .sign(secret_key)
+    .to_armored_writer(writer)
+)
+
+message, _ = Message.from_armor(writer.getvalue())
+assert message.literal_mode() == "utf8"
+assert message.signature_infos()[0].signature_type == "text"
+```
+
+### 6. Generate modern RFC 9580-compatible key material
 
 ```python
 from openpgp import (
@@ -244,7 +310,7 @@ encrypted_message, _ = Message.from_armor(encrypted)
 assert encrypted_message.decrypt(secret_key).payload_bytes() == b"secret"
 ```
 
-### 6. Customize secret-key S2K protection for generated keys
+### 7. Customize secret-key S2K protection for generated keys
 
 ```python
 from openpgp import (

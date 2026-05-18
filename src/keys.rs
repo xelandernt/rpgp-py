@@ -3,7 +3,12 @@ use crate::info::*;
 use crate::key_params::*;
 use crate::serialization::*;
 use crate::*;
-use std::path::PathBuf;
+use pgp::composed::{
+    Encryption as PgpEncryption, EncryptionSeipdV1, EncryptionSeipdV2,
+    MessageBuilder as PgpMessageBuilder,
+};
+use pyo3::{prelude::PyRef, types::PyAny};
+use std::{io::Read, path::PathBuf};
 
 /// A transferable OpenPGP public key (certificate) as defined by RFC 9580.
 #[pyclass(module = "openpgp", from_py_object)]
@@ -171,6 +176,17 @@ impl PublicKey {
             .iter()
             .map(subkey_binding_info_from_signed_public_subkey)
             .collect::<Vec<_>>()
+    }
+
+    /// The public subkey objects attached to the certificate.
+    #[getter]
+    fn public_subkeys(&self) -> Vec<PublicSubkey> {
+        self.inner
+            .public_subkeys
+            .iter()
+            .cloned()
+            .map(|inner| PublicSubkey { inner })
+            .collect()
     }
 
     /// Verify the certificate's self-signatures and subkey binding signatures.
@@ -381,6 +397,28 @@ impl SecretKey {
             .collect::<Vec<_>>()
     }
 
+    /// The public subkey views attached to the secret certificate.
+    #[getter]
+    fn public_subkeys(&self) -> Vec<PublicSubkey> {
+        self.inner
+            .public_subkeys
+            .iter()
+            .cloned()
+            .map(|inner| PublicSubkey { inner })
+            .collect()
+    }
+
+    /// The secret subkey objects attached to the certificate.
+    #[getter]
+    fn secret_subkeys(&self) -> Vec<SecretSubkey> {
+        self.inner
+            .secret_subkeys
+            .iter()
+            .cloned()
+            .map(|inner| SecretSubkey { inner })
+            .collect()
+    }
+
     /// Return the primary secret key packet's RFC 9580 S2K protection parameters.
     ///
     /// Unprotected keys return an ``S2kParams`` instance with usage ``"unprotected"``.
@@ -428,4 +466,552 @@ impl SecretKey {
             self.key_id()
         )
     }
+}
+
+/// A signed OpenPGP public subkey together with its binding signatures.
+#[pyclass(module = "openpgp", from_py_object)]
+#[derive(Clone)]
+pub(crate) struct PublicSubkey {
+    pub(crate) inner: SignedPublicSubKey,
+}
+
+#[pymethods]
+impl PublicSubkey {
+    #[getter]
+    fn fingerprint(&self) -> String {
+        self.inner.fingerprint().to_string()
+    }
+
+    #[getter]
+    fn key_id(&self) -> String {
+        self.inner.legacy_key_id().to_string()
+    }
+
+    #[getter]
+    fn version(&self) -> u8 {
+        key_version_number(self.inner.key.version())
+    }
+
+    #[getter]
+    fn created_at(&self) -> u32 {
+        self.inner.key.created_at().as_secs()
+    }
+
+    #[getter]
+    fn public_key_algorithm(&self) -> String {
+        public_key_algorithm_name(self.inner.key.algorithm()).to_string()
+    }
+
+    #[getter]
+    fn public_params(&self) -> PublicParamsInfo {
+        public_params_info_from_params(self.inner.key.public_params())
+    }
+
+    #[getter]
+    fn packet_version(&self) -> PyPacketHeaderVersion {
+        PyPacketHeaderVersion {
+            inner: self.inner.key.packet_header_version(),
+        }
+    }
+
+    /// The binding and revocation signatures attached to this subkey packet.
+    #[getter]
+    fn signatures(&self) -> Vec<SignatureInfo> {
+        self.inner
+            .signatures
+            .iter()
+            .map(|signature| signature_info_from_signature(signature, false))
+            .collect()
+    }
+
+    fn to_bytes(&self) -> PyResult<Vec<u8>> {
+        self.inner.to_bytes().map_err(to_py_err)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "PublicSubkey(fingerprint='{}', key_id='{}')",
+            self.fingerprint(),
+            self.key_id()
+        )
+    }
+}
+
+/// A signed OpenPGP secret subkey together with its binding signatures.
+#[pyclass(module = "openpgp", from_py_object)]
+#[derive(Clone)]
+pub(crate) struct SecretSubkey {
+    pub(crate) inner: SignedSecretSubKey,
+}
+
+#[pymethods]
+impl SecretSubkey {
+    #[getter]
+    fn fingerprint(&self) -> String {
+        self.inner.key.public_key().fingerprint().to_string()
+    }
+
+    #[getter]
+    fn key_id(&self) -> String {
+        self.inner.key.public_key().legacy_key_id().to_string()
+    }
+
+    #[getter]
+    fn version(&self) -> u8 {
+        key_version_number(self.inner.key.version())
+    }
+
+    #[getter]
+    fn created_at(&self) -> u32 {
+        self.inner.key.created_at().as_secs()
+    }
+
+    #[getter]
+    fn public_key_algorithm(&self) -> String {
+        public_key_algorithm_name(self.inner.key.algorithm()).to_string()
+    }
+
+    #[getter]
+    fn public_params(&self) -> PublicParamsInfo {
+        public_params_info_from_params(self.inner.key.public_params())
+    }
+
+    #[getter]
+    fn packet_version(&self) -> PyPacketHeaderVersion {
+        PyPacketHeaderVersion {
+            inner: self.inner.key.packet_header_version(),
+        }
+    }
+
+    /// The binding and revocation signatures attached to this subkey packet.
+    #[getter]
+    fn signatures(&self) -> Vec<SignatureInfo> {
+        self.inner
+            .signatures
+            .iter()
+            .map(|signature| signature_info_from_signature(signature, false))
+            .collect()
+    }
+
+    /// Return the corresponding public subkey, dropping secret key material.
+    fn signed_public_key(&self) -> PublicSubkey {
+        PublicSubkey {
+            inner: self.inner.signed_public_key(),
+        }
+    }
+
+    fn to_bytes(&self) -> PyResult<Vec<u8>> {
+        self.inner.to_bytes().map_err(to_py_err)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SecretSubkey(fingerprint='{}', key_id='{}')",
+            self.fingerprint(),
+            self.key_id()
+        )
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum PublicRecipient {
+    Certificate(SignedPublicKey),
+    Subkey(SignedPublicSubKey),
+}
+
+impl PublicRecipient {
+    pub(crate) fn encrypt_to_message_builder_v1<'a, R: Read>(
+        &'a self,
+        builder: &mut PgpMessageBuilder<'a, R, EncryptionSeipdV1>,
+        anonymous_recipient: bool,
+    ) -> PyResult<()> {
+        match self {
+            Self::Certificate(recipient) => {
+                if let Some(subkey) = recipient
+                    .public_subkeys
+                    .iter()
+                    .find(|subkey| subkey.algorithm().can_encrypt())
+                {
+                    if anonymous_recipient {
+                        builder
+                            .encrypt_to_key_anonymous(rand::thread_rng(), subkey)
+                            .map_err(to_py_err)?;
+                    } else {
+                        builder
+                            .encrypt_to_key(rand::thread_rng(), subkey)
+                            .map_err(to_py_err)?;
+                    }
+                } else if recipient.algorithm().can_encrypt() {
+                    if anonymous_recipient {
+                        builder
+                            .encrypt_to_key_anonymous(rand::thread_rng(), recipient)
+                            .map_err(to_py_err)?;
+                    } else {
+                        builder
+                            .encrypt_to_key(rand::thread_rng(), recipient)
+                            .map_err(to_py_err)?;
+                    }
+                } else {
+                    return Err(to_py_err(
+                        "public key does not contain an encryption-capable primary key or subkey",
+                    ));
+                }
+            }
+            Self::Subkey(subkey) => {
+                if !subkey.algorithm().can_encrypt() {
+                    return Err(to_py_err("public subkey is not encryption-capable"));
+                }
+                if anonymous_recipient {
+                    builder
+                        .encrypt_to_key_anonymous(rand::thread_rng(), subkey)
+                        .map_err(to_py_err)?;
+                } else {
+                    builder
+                        .encrypt_to_key(rand::thread_rng(), subkey)
+                        .map_err(to_py_err)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn encrypt_to_message_builder_v2<'a, R: Read>(
+        &'a self,
+        builder: &mut PgpMessageBuilder<'a, R, EncryptionSeipdV2>,
+        anonymous_recipient: bool,
+    ) -> PyResult<()> {
+        match self {
+            Self::Certificate(recipient) => {
+                if let Some(subkey) = recipient
+                    .public_subkeys
+                    .iter()
+                    .find(|subkey| subkey.algorithm().can_encrypt())
+                {
+                    if anonymous_recipient {
+                        builder
+                            .encrypt_to_key_anonymous(rand::thread_rng(), subkey)
+                            .map_err(to_py_err)?;
+                    } else {
+                        builder
+                            .encrypt_to_key(rand::thread_rng(), subkey)
+                            .map_err(to_py_err)?;
+                    }
+                } else if recipient.algorithm().can_encrypt() {
+                    if anonymous_recipient {
+                        builder
+                            .encrypt_to_key_anonymous(rand::thread_rng(), recipient)
+                            .map_err(to_py_err)?;
+                    } else {
+                        builder
+                            .encrypt_to_key(rand::thread_rng(), recipient)
+                            .map_err(to_py_err)?;
+                    }
+                } else {
+                    return Err(to_py_err(
+                        "public key does not contain an encryption-capable primary key or subkey",
+                    ));
+                }
+            }
+            Self::Subkey(subkey) => {
+                if !subkey.algorithm().can_encrypt() {
+                    return Err(to_py_err("public subkey is not encryption-capable"));
+                }
+                if anonymous_recipient {
+                    builder
+                        .encrypt_to_key_anonymous(rand::thread_rng(), subkey)
+                        .map_err(to_py_err)?;
+                } else {
+                    builder
+                        .encrypt_to_key(rand::thread_rng(), subkey)
+                        .map_err(to_py_err)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn encrypt_session_key(
+        &self,
+        session_key: &PgpRawSessionKey,
+        version: EncryptionVersion,
+        symmetric_algorithm: SymmetricKeyAlgorithm,
+        anonymous_recipient: bool,
+    ) -> PyResult<PgpPublicKeyEncryptedSessionKey> {
+        let packet = match self {
+            Self::Certificate(recipient) => {
+                if let Some(subkey) = recipient
+                    .public_subkeys
+                    .iter()
+                    .find(|subkey| subkey.algorithm().can_encrypt())
+                {
+                    match version {
+                        EncryptionVersion::SeipdV1 => {
+                            PgpPublicKeyEncryptedSessionKey::from_session_key_v3(
+                                rand::thread_rng(),
+                                session_key,
+                                symmetric_algorithm,
+                                subkey,
+                            )
+                            .map_err(to_py_err)
+                        }
+                        EncryptionVersion::SeipdV2 => {
+                            PgpPublicKeyEncryptedSessionKey::from_session_key_v6(
+                                rand::thread_rng(),
+                                session_key,
+                                subkey,
+                            )
+                            .map_err(to_py_err)
+                        }
+                    }
+                } else if recipient.algorithm().can_encrypt() {
+                    match version {
+                        EncryptionVersion::SeipdV1 => {
+                            PgpPublicKeyEncryptedSessionKey::from_session_key_v3(
+                                rand::thread_rng(),
+                                session_key,
+                                symmetric_algorithm,
+                                recipient,
+                            )
+                            .map_err(to_py_err)
+                        }
+                        EncryptionVersion::SeipdV2 => {
+                            PgpPublicKeyEncryptedSessionKey::from_session_key_v6(
+                                rand::thread_rng(),
+                                session_key,
+                                recipient,
+                            )
+                            .map_err(to_py_err)
+                        }
+                    }
+                } else {
+                    Err(to_py_err(
+                        "public key does not contain an encryption-capable primary key or subkey",
+                    ))
+                }
+            }
+            Self::Subkey(subkey) => {
+                if !subkey.algorithm().can_encrypt() {
+                    return Err(to_py_err("public subkey is not encryption-capable"));
+                }
+                match version {
+                    EncryptionVersion::SeipdV1 => {
+                        PgpPublicKeyEncryptedSessionKey::from_session_key_v3(
+                            rand::thread_rng(),
+                            session_key,
+                            symmetric_algorithm,
+                            subkey,
+                        )
+                        .map_err(to_py_err)
+                    }
+                    EncryptionVersion::SeipdV2 => {
+                        PgpPublicKeyEncryptedSessionKey::from_session_key_v6(
+                            rand::thread_rng(),
+                            session_key,
+                            subkey,
+                        )
+                        .map_err(to_py_err)
+                    }
+                }
+            }
+        }?;
+
+        Ok(if anonymous_recipient {
+            match packet {
+                PgpPublicKeyEncryptedSessionKey::V3 {
+                    packet_header,
+                    id: _,
+                    pk_algo,
+                    values,
+                } => PgpPublicKeyEncryptedSessionKey::V3 {
+                    packet_header,
+                    id: KeyId::WILDCARD,
+                    pk_algo,
+                    values,
+                },
+                PgpPublicKeyEncryptedSessionKey::V6 {
+                    packet_header,
+                    fingerprint: _,
+                    pk_algo,
+                    values,
+                } => PgpPublicKeyEncryptedSessionKey::V6 {
+                    packet_header,
+                    fingerprint: None,
+                    pk_algo,
+                    values,
+                },
+                other => other,
+            }
+        } else {
+            packet
+        })
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum SecretSigner {
+    Certificate(SignedSecretKey),
+    Subkey(SignedSecretSubKey),
+}
+
+impl SecretSigner {
+    pub(crate) fn apply_message_signature<'a, R: Read, E: PgpEncryption>(
+        &'a self,
+        builder: &mut PgpMessageBuilder<'a, R, E>,
+        password: Password,
+        hash_algorithm: HashAlgorithm,
+    ) {
+        match self {
+            Self::Certificate(signer) => {
+                builder.sign(&signer.primary_key, password, hash_algorithm);
+            }
+            Self::Subkey(subkey) => {
+                builder.sign(&subkey.key, password, hash_algorithm);
+            }
+        }
+    }
+
+    pub(crate) fn detached_binary_signature(
+        &self,
+        data: &[u8],
+        password: &Password,
+        hash_algorithm: HashAlgorithm,
+    ) -> PyResult<PgpDetachedSignature> {
+        match self {
+            Self::Certificate(signer) => PgpDetachedSignature::sign_binary_data(
+                rand::thread_rng(),
+                &signer.primary_key,
+                password,
+                hash_algorithm,
+                data,
+            )
+            .map_err(to_py_err),
+            Self::Subkey(subkey) => PgpDetachedSignature::sign_binary_data(
+                rand::thread_rng(),
+                &subkey.key,
+                password,
+                hash_algorithm,
+                data,
+            )
+            .map_err(to_py_err),
+        }
+    }
+
+    pub(crate) fn detached_text_signature(
+        &self,
+        text: &str,
+        password: &Password,
+        hash_algorithm: HashAlgorithm,
+    ) -> PyResult<PgpDetachedSignature> {
+        match self {
+            Self::Certificate(signer) => PgpDetachedSignature::sign_text_data(
+                rand::thread_rng(),
+                &signer.primary_key,
+                password,
+                hash_algorithm,
+                Cursor::new(text.as_bytes()),
+            )
+            .map_err(to_py_err),
+            Self::Subkey(subkey) => PgpDetachedSignature::sign_text_data(
+                rand::thread_rng(),
+                &subkey.key,
+                password,
+                hash_algorithm,
+                Cursor::new(text.as_bytes()),
+            )
+            .map_err(to_py_err),
+        }
+    }
+
+    pub(crate) fn cleartext_signature(
+        &self,
+        text: &str,
+        password: &Password,
+        hash_algorithm: HashAlgorithm,
+    ) -> pgp::errors::Result<Signature> {
+        match self {
+            Self::Certificate(signer) => PgpDetachedSignature::sign_text_data(
+                rand::thread_rng(),
+                &signer.primary_key,
+                password,
+                hash_algorithm,
+                Cursor::new(text.as_bytes()),
+            )
+            .map(|signature| signature.signature),
+            Self::Subkey(subkey) => PgpDetachedSignature::sign_text_data(
+                rand::thread_rng(),
+                &subkey.key,
+                password,
+                hash_algorithm,
+                Cursor::new(text.as_bytes()),
+            )
+            .map(|signature| signature.signature),
+        }
+    }
+}
+
+pub(crate) fn public_recipient_from_python(
+    py: Python<'_>,
+    recipient: Py<PyAny>,
+) -> PyResult<PublicRecipient> {
+    let recipient = recipient.bind(py);
+    if let Ok(public_key) = recipient.extract::<PyRef<'_, PublicKey>>() {
+        return Ok(PublicRecipient::Certificate(public_key.inner.clone()));
+    }
+    if let Ok(subkey) = recipient.extract::<PyRef<'_, PublicSubkey>>() {
+        return Ok(PublicRecipient::Subkey(subkey.inner.clone()));
+    }
+    Err(to_py_err("recipient must be a PublicKey or PublicSubkey"))
+}
+
+pub(crate) fn public_recipients_from_python(
+    py: Python<'_>,
+    recipients: Vec<Py<PyAny>>,
+) -> PyResult<Vec<PublicRecipient>> {
+    if recipients.is_empty() {
+        return Err(to_py_err("at least one recipient is required"));
+    }
+
+    recipients
+        .into_iter()
+        .map(|recipient| public_recipient_from_python(py, recipient))
+        .collect()
+}
+
+pub(crate) fn secret_signer_from_python(
+    py: Python<'_>,
+    signer: Py<PyAny>,
+) -> PyResult<SecretSigner> {
+    let signer = signer.bind(py);
+    if let Ok(secret_key) = signer.extract::<PyRef<'_, SecretKey>>() {
+        return Ok(SecretSigner::Certificate(secret_key.inner.clone()));
+    }
+    if let Ok(subkey) = signer.extract::<PyRef<'_, SecretSubkey>>() {
+        return Ok(SecretSigner::Subkey(subkey.inner.clone()));
+    }
+    Err(to_py_err("signer must be a SecretKey or SecretSubkey"))
+}
+
+pub(crate) fn signer_entries_from_python(
+    py: Python<'_>,
+    signers: Vec<Py<PyAny>>,
+    passwords: Option<Vec<Option<String>>>,
+) -> PyResult<(Vec<SecretSigner>, Vec<Password>)> {
+    if signers.is_empty() {
+        return Err(to_py_err("at least one signer is required"));
+    }
+
+    let passwords = passwords.unwrap_or_else(|| vec![None; signers.len()]);
+    if passwords.len() != signers.len() {
+        return Err(to_py_err("password count must match signer count"));
+    }
+
+    let signers = signers
+        .into_iter()
+        .map(|signer| secret_signer_from_python(py, signer))
+        .collect::<PyResult<Vec<_>>>()?;
+    let passwords = passwords
+        .into_iter()
+        .map(|password| password_from_option(password.as_deref()))
+        .collect::<Vec<_>>();
+    Ok((signers, passwords))
 }

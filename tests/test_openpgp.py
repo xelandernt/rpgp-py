@@ -1,3 +1,4 @@
+import io
 import json
 from pathlib import Path
 from typing import TypedDict, cast
@@ -5,15 +6,18 @@ from typing import TypedDict, cast
 import pytest
 
 from openpgp import (
+    ArmorOptions,
     CleartextSignedMessage,
     DetachedSignature,
     EncryptionCaps,
     KeyType,
     Message,
+    MessageBuilder,
     PublicKey,
     SecretKey,
     SecretKeyParamsBuilder,
     SignatureInfo,
+    StringToKey,
     SubkeyParamsBuilder,
     encrypt_message_to_recipient_bytes,
     encrypt_message_to_recipient,
@@ -84,6 +88,37 @@ def generate_signing_and_encryption_key(user_id: str) -> SecretKey:
         .preferred_symmetric_algorithms(["aes256", "aes192", "aes128"])
         .preferred_hash_algorithms(["sha256", "sha384", "sha512", "sha224"])
         .preferred_compression_algorithms(["zlib", "zip"])
+        .subkey(
+            SubkeyParamsBuilder()
+            .version(6)
+            .key_type(KeyType.x25519())
+            .can_encrypt(EncryptionCaps.all())
+            .build()
+        )
+        .build()
+        .generate()
+    )
+
+
+def generate_subkey_signing_and_encryption_key(user_id: str) -> SecretKey:
+    return (
+        SecretKeyParamsBuilder()
+        .version(6)
+        .key_type(KeyType.ed25519())
+        .can_certify(True)
+        .can_sign(False)
+        .feature_seipd_v2(True)
+        .primary_user_id(user_id)
+        .preferred_symmetric_algorithms(["aes256", "aes192", "aes128"])
+        .preferred_hash_algorithms(["sha256", "sha384", "sha512", "sha224"])
+        .preferred_compression_algorithms(["zlib", "zip"])
+        .subkey(
+            SubkeyParamsBuilder()
+            .version(6)
+            .key_type(KeyType.ed25519())
+            .can_sign(True)
+            .build()
+        )
         .subkey(
             SubkeyParamsBuilder()
             .version(6)
@@ -289,6 +324,21 @@ def test_sign_message_supports_custom_hash_algorithm() -> None:
     message.verify(public_key)
 
 
+def test_sign_message_accepts_secret_subkey() -> None:
+    secret_key = generate_subkey_signing_and_encryption_key(
+        "Subkey Signer <subkey@example.com>"
+    )
+    public_key = secret_key.to_public_key()
+    signing_subkey = secret_key.secret_subkeys[0]
+
+    armored = sign_message(b"Hello from a subkey", signing_subkey)
+    message, _ = Message.from_armor(armored)
+    info = message.signature_infos()[0]
+
+    assert info.issuer_fingerprints == [signing_subkey.fingerprint]
+    message.verify(public_key)
+
+
 def test_sign_message_many_supports_multiple_signers() -> None:
     first_secret_key, _ = SecretKey.from_armor(SECRET_KEY)
     second_secret_key = generate_signing_and_encryption_key(
@@ -343,6 +393,24 @@ def test_sign_and_verify_detached_signature() -> None:
     reparsed = DetachedSignature.from_bytes(signature.to_bytes())
     reparsed.verify(public_key, payload)
 
+    armored_signature, headers = DetachedSignature.from_armor(signature.to_armored())
+    assert headers == {}
+
+
+def test_detached_signature_sign_binary_accepts_secret_subkey() -> None:
+    secret_key = generate_subkey_signing_and_encryption_key(
+        "Detached Subkey <subkey@example.com>"
+    )
+    public_key = secret_key.to_public_key()
+    signing_subkey = secret_key.secret_subkeys[0]
+    payload = b"detached subkey payload"
+
+    signature = DetachedSignature.sign_binary(payload, signing_subkey)
+
+    assert signature.signature_info().issuer_fingerprints == [
+        signing_subkey.fingerprint
+    ]
+    signature.verify(public_key, payload)
     armored_signature, headers = DetachedSignature.from_armor(signature.to_armored())
     assert headers == {}
     armored_signature.verify(public_key, payload)
@@ -584,6 +652,26 @@ def test_encrypt_and_decrypt_message_to_recipient() -> None:
         decrypted.verify(public_key)
 
 
+def test_encrypt_message_to_recipient_accepts_public_subkey() -> None:
+    secret_key = generate_subkey_signing_and_encryption_key(
+        "Encrypt Recipient <subkey@example.com>"
+    )
+    public_key = secret_key.to_public_key()
+    encryption_subkey = public_key.public_subkeys[1]
+
+    message_bytes = encrypt_message_to_recipient_bytes(
+        b"recipient subkey payload",
+        encryption_subkey,
+    )
+    message = Message.from_bytes(message_bytes)
+
+    assert (
+        message.public_key_encrypted_session_key_packets()[0].recipient_fingerprint
+        == encryption_subkey.fingerprint
+    )
+    assert message.decrypt(secret_key).payload_bytes() == b"recipient subkey payload"
+
+
 def test_message_binary_round_trip_and_packet_access_for_recipient_message() -> None:
     secret_key, _ = SecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
@@ -688,6 +776,142 @@ def test_encrypt_to_recipient_with_custom_session_key_and_export_raw_pkesk() -> 
     assert packet.public_key_algorithm is not None
     assert packet.values_bytes() is not None
     assert packet.to_bytes()
+
+
+def test_message_builder_compression_round_trip() -> None:
+    message_bytes = (
+        MessageBuilder.from_bytes("payload.txt", b"hello builder")
+        .compression("zlib")
+        .to_vec()
+    )
+    message = Message.from_bytes(message_bytes)
+
+    assert message.kind == "compressed"
+    assert message.payload_text() == "hello builder"
+
+
+def test_message_builder_password_encryption_round_trip() -> None:
+    armored = (
+        MessageBuilder.from_bytes("payload.txt", b"Hello, world!")
+        .seipd_v2("aes256", "ocb")
+        .encrypt_with_password(StringToKey.argon2(1, 4, 21), "password")
+        .to_armored_string()
+    )
+    message, headers = Message.from_armor(armored)
+
+    assert headers == {}
+    assert message.kind == "encrypted"
+    assert message.decrypt_with_password("password").payload_text() == "Hello, world!"
+
+
+def test_message_builder_rejects_invalid_session_key_length() -> None:
+    builder = MessageBuilder.from_bytes("payload.bin", b"abc").seipd_v2("aes128", "ocb")
+
+    with pytest.raises(ValueError, match="session_key must be exactly 16 bytes"):
+        builder.set_session_key(bytes(range(15)))
+
+
+def test_message_builder_armor_options_control_headers_and_checksum() -> None:
+    armored = (
+        MessageBuilder.from_bytes("payload.txt", b"hello")
+        .seipd_v1("aes256")
+        .encrypt_with_password(StringToKey.iterated("sha256", 96), "hunter2")
+        .to_armored_string(
+            ArmorOptions({"Comment": ["builder test"]}, include_checksum=False)
+        )
+    )
+    message, headers = Message.from_armor(armored)
+
+    assert headers == {"Comment": ["builder test"]}
+    assert "\n=" not in armored
+    assert message.decrypt_with_password("hunter2").payload_text() == "hello"
+
+
+def test_message_builder_from_reader_data_mode_and_text_signature() -> None:
+    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    public_key = secret_key.to_public_key()
+
+    message_bytes = (
+        MessageBuilder.from_reader("payload.txt", io.BytesIO(b"hello\r\nworld\r\n"))
+        .data_mode("utf8")
+        .sign_text()
+        .sign(secret_key)
+        .to_vec()
+    )
+    message = Message.from_bytes(message_bytes)
+    info = message.signature_infos()[0]
+
+    assert message.literal_mode() == "utf8"
+    assert message.payload_text() == "hello\r\nworld\r\n"
+    assert info.signature_type == "text"
+    message.verify(public_key)
+
+
+def test_message_builder_session_key_returns_generated_and_overridden_values() -> None:
+    builder = MessageBuilder.from_bytes("payload.bin", b"payload").seipd_v2(
+        "aes128", "ocb"
+    )
+
+    generated = builder.session_key()
+    assert len(generated) == 16
+
+    custom = bytes(range(16))
+    assert builder.set_session_key(custom).session_key() == custom
+
+
+def test_message_builder_writer_and_file_outputs(tmp_path: Path) -> None:
+    binary_writer = io.BytesIO()
+    MessageBuilder.from_reader("payload.txt", io.BytesIO(b"writer payload")).to_writer(
+        binary_writer
+    )
+    binary_message = Message.from_bytes(binary_writer.getvalue())
+    assert binary_message.payload_text() == "writer payload"
+
+    text_writer = io.StringIO()
+    MessageBuilder.from_bytes(
+        "payload.txt", b"armored writer payload"
+    ).to_armored_writer(text_writer)
+    armored_message, headers = Message.from_armor(text_writer.getvalue())
+    assert headers == {}
+    assert armored_message.payload_text() == "armored writer payload"
+
+    binary_path = tmp_path / "nested" / "message.pgp"
+    MessageBuilder.from_bytes("payload.txt", b"file payload").to_file(binary_path)
+    assert Message.from_bytes(binary_path.read_bytes()).payload_text() == "file payload"
+
+    armored_path = tmp_path / "nested" / "message.asc"
+    MessageBuilder.from_bytes("payload.txt", b"armored file payload").to_armored_file(
+        armored_path,
+        ArmorOptions({"Comment": ["file output"]}),
+    )
+    file_message, file_headers = Message.from_armor(armored_path.read_text())
+    assert file_headers == {"Comment": ["file output"]}
+    assert file_message.payload_text() == "armored file payload"
+
+
+def test_message_builder_can_sign_and_encrypt_to_subkeys() -> None:
+    secret_key = generate_subkey_signing_and_encryption_key(
+        "Builder Subkeys <builder@example.com>"
+    )
+    public_key = secret_key.to_public_key()
+    signing_subkey = secret_key.secret_subkeys[0]
+    encryption_subkey = public_key.public_subkeys[1]
+
+    armored = (
+        MessageBuilder.from_bytes("payload.txt", b"subkey builder payload")
+        .sign(signing_subkey)
+        .seipd_v2("aes256", "ocb")
+        .encrypt_to_key(encryption_subkey)
+        .to_armored_string()
+    )
+    message, _ = Message.from_armor(armored)
+    decrypted = message.decrypt(secret_key)
+
+    assert decrypted.payload_bytes() == b"subkey builder payload"
+    assert decrypted.signature_infos()[0].issuer_fingerprints == [
+        signing_subkey.fingerprint
+    ]
+    decrypted.verify(public_key)
 
 
 def test_password_encryption_with_custom_session_key_and_raw_skesk() -> None:

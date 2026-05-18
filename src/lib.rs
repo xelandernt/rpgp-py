@@ -60,6 +60,7 @@ fn to_py_err(error: impl std::fmt::Display) -> PyErr {
 }
 
 mod api;
+mod builder;
 mod conversions;
 mod info;
 mod key_params;
@@ -70,6 +71,8 @@ mod serialization;
 
 #[pymodule]
 pub(crate) fn _openpgp(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_class::<builder::PyArmorOptions>()?;
+    module.add_class::<builder::PyMessageBuilder>()?;
     module.add_class::<key_params::EncryptionCaps>()?;
     module.add_class::<key_params::PyPacketHeaderVersion>()?;
     module.add_class::<key_params::KeyType>()?;
@@ -80,7 +83,9 @@ pub(crate) fn _openpgp(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<key_params::SecretKeyParams>()?;
     module.add_class::<key_params::SecretKeyParamsBuilder>()?;
     module.add_class::<keys::PublicKey>()?;
+    module.add_class::<keys::PublicSubkey>()?;
     module.add_class::<keys::SecretKey>()?;
+    module.add_class::<keys::SecretSubkey>()?;
     module.add_class::<packets::PublicKeyEncryptedSessionKeyPacket>()?;
     module.add_class::<packets::SymKeyEncryptedSessionKeyPacket>()?;
     module.add_class::<packets::EncryptedDataPacket>()?;

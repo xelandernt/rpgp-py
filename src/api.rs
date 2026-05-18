@@ -5,84 +5,11 @@ use crate::messages::*;
 use crate::packets::*;
 use crate::serialization::*;
 use crate::*;
-
-macro_rules! encrypt_to_recipient {
-    ($builder:expr, $recipient:expr, $anonymous_recipient:expr) => {{
-        let recipient = $recipient;
-        if let Some(subkey) = recipient
-            .public_subkeys
-            .iter()
-            .find(|subkey| subkey.algorithm().can_encrypt())
-        {
-            if $anonymous_recipient {
-                $builder
-                    .encrypt_to_key_anonymous(rand::thread_rng(), subkey)
-                    .map_err(to_py_err)?;
-            } else {
-                $builder
-                    .encrypt_to_key(rand::thread_rng(), subkey)
-                    .map_err(to_py_err)?;
-            }
-        } else if recipient.algorithm().can_encrypt() {
-            if $anonymous_recipient {
-                $builder
-                    .encrypt_to_key_anonymous(rand::thread_rng(), recipient)
-                    .map_err(to_py_err)?;
-            } else {
-                $builder
-                    .encrypt_to_key(rand::thread_rng(), recipient)
-                    .map_err(to_py_err)?;
-            }
-        } else {
-            return Err(to_py_err(
-                "public key does not contain an encryption-capable primary key or subkey",
-            ));
-        }
-    }};
-}
-
-fn signer_entries_from_python(
-    py: Python<'_>,
-    signers: Vec<Py<SecretKey>>,
-    passwords: Option<Vec<Option<String>>>,
-) -> PyResult<(Vec<SignedSecretKey>, Vec<Password>)> {
-    if signers.is_empty() {
-        return Err(to_py_err("at least one signer is required"));
-    }
-
-    let passwords = passwords.unwrap_or_else(|| vec![None; signers.len()]);
-    if passwords.len() != signers.len() {
-        return Err(to_py_err("password count must match signer count"));
-    }
-
-    let signers = signers
-        .into_iter()
-        .map(|signer| signer.borrow(py).inner.clone())
-        .collect::<Vec<_>>();
-    let passwords = passwords
-        .into_iter()
-        .map(|password| password_from_option(password.as_deref()))
-        .collect::<Vec<_>>();
-    Ok((signers, passwords))
-}
-
-fn recipients_from_python(
-    py: Python<'_>,
-    recipients: Vec<Py<PublicKey>>,
-) -> PyResult<Vec<SignedPublicKey>> {
-    if recipients.is_empty() {
-        return Err(to_py_err("at least one recipient is required"));
-    }
-
-    Ok(recipients
-        .into_iter()
-        .map(|recipient| recipient.borrow(py).inner.clone())
-        .collect())
-}
+use pyo3::types::PyAny;
 
 fn sign_message_with_signers(
     data: &[u8],
-    signers: &[SignedSecretKey],
+    signers: &[SecretSigner],
     passwords: Vec<Password>,
     file_name: &str,
     hash_algorithm: HashAlgorithm,
@@ -90,7 +17,7 @@ fn sign_message_with_signers(
     let mut builder =
         MessageBuilder::from_reader(file_name.to_string(), Cursor::new(data.to_vec()));
     for (signer, password) in signers.iter().zip(passwords) {
-        builder.sign(&signer.primary_key, password, hash_algorithm);
+        signer.apply_message_signature(&mut builder, password, hash_algorithm);
     }
     builder
         .to_armored_string(&mut rand::thread_rng(), ArmorOptions::default())
@@ -99,7 +26,7 @@ fn sign_message_with_signers(
 
 fn sign_cleartext_with_signers(
     text: &str,
-    signers: &[SignedSecretKey],
+    signers: &[SecretSigner],
     passwords: Vec<Password>,
     hash_algorithm: HashAlgorithm,
 ) -> PyResult<String> {
@@ -108,17 +35,6 @@ fn sign_cleartext_with_signers(
     message
         .to_armored_string(ArmorOptions::default())
         .map_err(to_py_err)
-}
-
-fn anonymize_public_key_encrypted_session_key(
-    mut packet: PgpPublicKeyEncryptedSessionKey,
-) -> PgpPublicKeyEncryptedSessionKey {
-    match &mut packet {
-        PgpPublicKeyEncryptedSessionKey::V3 { id, .. } => *id = KeyId::WILDCARD,
-        PgpPublicKeyEncryptedSessionKey::V6 { fingerprint, .. } => *fingerprint = None,
-        PgpPublicKeyEncryptedSessionKey::Other { .. } => {}
-    }
-    packet
 }
 
 /// Inspect an ASCII-armored or binary OpenPGP message without exposing its payload.
@@ -139,21 +55,17 @@ pub(crate) fn inspect_message_bytes(data: &[u8]) -> PyResult<MessageInfo> {
 #[pyfunction]
 #[pyo3(signature = (data, signer, password=None, file_name="", hash_algorithm="sha256"))]
 pub(crate) fn sign_message(
+    py: Python<'_>,
     data: &[u8],
-    signer: PyRef<'_, SecretKey>,
+    signer: Py<PyAny>,
     password: Option<&str>,
     file_name: &str,
     hash_algorithm: &str,
 ) -> PyResult<String> {
     let password = password_from_option(password);
     let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
-    sign_message_with_signers(
-        data,
-        &[signer.inner.clone()],
-        vec![password],
-        file_name,
-        hash_algorithm,
-    )
+    let signer = secret_signer_from_python(py, signer)?;
+    sign_message_with_signers(data, &[signer], vec![password], file_name, hash_algorithm)
 }
 
 /// Create a multi-signed binary message and return it as ASCII armor.
@@ -165,7 +77,7 @@ pub(crate) fn sign_message(
 pub(crate) fn sign_message_many(
     py: Python<'_>,
     data: &[u8],
-    signers: Vec<Py<SecretKey>>,
+    signers: Vec<Py<PyAny>>,
     passwords: Option<Vec<Option<String>>>,
     file_name: &str,
     hash_algorithm: &str,
@@ -181,19 +93,16 @@ pub(crate) fn sign_message_many(
 #[pyfunction]
 #[pyo3(signature = (text, signer, password=None, hash_algorithm="sha256"))]
 pub(crate) fn sign_cleartext_message(
+    py: Python<'_>,
     text: &str,
-    signer: PyRef<'_, SecretKey>,
+    signer: Py<PyAny>,
     password: Option<&str>,
     hash_algorithm: &str,
 ) -> PyResult<String> {
     let password = password_from_option(password);
     let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
-    sign_cleartext_with_signers(
-        text,
-        &[signer.inner.clone()],
-        vec![password],
-        hash_algorithm,
-    )
+    let signer = secret_signer_from_python(py, signer)?;
+    sign_cleartext_with_signers(text, &[signer], vec![password], hash_algorithm)
 }
 
 /// Create a multi-signed cleartext signed message and return it as ASCII armor.
@@ -205,7 +114,7 @@ pub(crate) fn sign_cleartext_message(
 pub(crate) fn sign_cleartext_message_many(
     py: Python<'_>,
     text: &str,
-    signers: Vec<Py<SecretKey>>,
+    signers: Vec<Py<PyAny>>,
     passwords: Option<Vec<Option<String>>>,
     hash_algorithm: &str,
 ) -> PyResult<String> {
@@ -216,59 +125,18 @@ pub(crate) fn sign_cleartext_message_many(
 
 pub(crate) fn encrypt_session_key_to_recipient_inner(
     session_key: &[u8],
-    recipient: &SignedPublicKey,
+    recipient: &PublicRecipient,
     version: EncryptionVersion,
     symmetric_algorithm: SymmetricKeyAlgorithm,
     anonymous_recipient: bool,
 ) -> PyResult<PgpPublicKeyEncryptedSessionKey> {
     let session_key = raw_session_key_from_bytes(session_key, symmetric_algorithm)?;
-    let packet = if let Some(subkey) = recipient
-        .public_subkeys
-        .iter()
-        .find(|subkey| subkey.algorithm().can_encrypt())
-    {
-        match version {
-            EncryptionVersion::SeipdV1 => PgpPublicKeyEncryptedSessionKey::from_session_key_v3(
-                rand::thread_rng(),
-                &session_key,
-                symmetric_algorithm,
-                subkey,
-            )
-            .map_err(to_py_err),
-            EncryptionVersion::SeipdV2 => PgpPublicKeyEncryptedSessionKey::from_session_key_v6(
-                rand::thread_rng(),
-                &session_key,
-                subkey,
-            )
-            .map_err(to_py_err),
-        }
-    } else if recipient.algorithm().can_encrypt() {
-        match version {
-            EncryptionVersion::SeipdV1 => PgpPublicKeyEncryptedSessionKey::from_session_key_v3(
-                rand::thread_rng(),
-                &session_key,
-                symmetric_algorithm,
-                recipient,
-            )
-            .map_err(to_py_err),
-            EncryptionVersion::SeipdV2 => PgpPublicKeyEncryptedSessionKey::from_session_key_v6(
-                rand::thread_rng(),
-                &session_key,
-                recipient,
-            )
-            .map_err(to_py_err),
-        }
-    } else {
-        return Err(to_py_err(
-            "public key does not contain an encryption-capable primary key or subkey",
-        ));
-    }?;
-
-    if anonymous_recipient {
-        Ok(anonymize_public_key_encrypted_session_key(packet))
-    } else {
-        Ok(packet)
-    }
+    recipient.encrypt_session_key(
+        &session_key,
+        version,
+        symmetric_algorithm,
+        anonymous_recipient,
+    )
 }
 
 pub(crate) fn encrypt_session_key_with_password_inner(
@@ -310,17 +178,19 @@ pub(crate) fn encrypt_session_key_with_password_inner(
     anonymous_recipient=false,
 ))]
 pub(crate) fn encrypt_session_key_to_recipient(
+    py: Python<'_>,
     session_key: &[u8],
-    recipient: PyRef<'_, PublicKey>,
+    recipient: Py<PyAny>,
     version: &str,
     symmetric_algorithm: &str,
     anonymous_recipient: bool,
 ) -> PyResult<PublicKeyEncryptedSessionKeyPacket> {
+    let recipient = public_recipient_from_python(py, recipient)?;
     let version = encryption_version_from_name(version)?;
     let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
     let inner = encrypt_session_key_to_recipient_inner(
         session_key,
-        &recipient.inner,
+        &recipient,
         version,
         symmetric_algorithm,
         anonymous_recipient,
@@ -371,8 +241,9 @@ pub(crate) fn encrypt_session_key_with_password(
     anonymous_recipient=false,
 ))]
 pub(crate) fn encrypt_message_to_recipient_bytes(
+    py: Python<'_>,
     data: &[u8],
-    recipient: PyRef<'_, PublicKey>,
+    recipient: Py<PyAny>,
     file_name: &str,
     version: &str,
     symmetric_algorithm: &str,
@@ -381,6 +252,7 @@ pub(crate) fn encrypt_message_to_recipient_bytes(
     session_key: Option<&[u8]>,
     anonymous_recipient: bool,
 ) -> PyResult<Vec<u8>> {
+    let recipient = public_recipient_from_python(py, recipient)?;
     let version = encryption_version_from_name(version)?;
     let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
     let aead_algorithm = aead_algorithm_from_name(aead_algorithm)?;
@@ -402,7 +274,7 @@ pub(crate) fn encrypt_message_to_recipient_bytes(
                     )?)
                     .map_err(to_py_err)?;
             }
-            encrypt_to_recipient!(builder, &recipient.inner, anonymous_recipient);
+            recipient.encrypt_to_message_builder_v1(&mut builder, anonymous_recipient)?;
             builder.to_vec(rand::thread_rng()).map_err(to_py_err)
         }
         EncryptionVersion::SeipdV2 => {
@@ -425,7 +297,7 @@ pub(crate) fn encrypt_message_to_recipient_bytes(
                     )?)
                     .map_err(to_py_err)?;
             }
-            encrypt_to_recipient!(builder, &recipient.inner, anonymous_recipient);
+            recipient.encrypt_to_message_builder_v2(&mut builder, anonymous_recipient)?;
             builder.to_vec(rand::thread_rng()).map_err(to_py_err)
         }
     }
@@ -445,8 +317,9 @@ pub(crate) fn encrypt_message_to_recipient_bytes(
     anonymous_recipient=false,
 ))]
 pub(crate) fn encrypt_message_to_recipient(
+    py: Python<'_>,
     data: &[u8],
-    recipient: PyRef<'_, PublicKey>,
+    recipient: Py<PyAny>,
     file_name: &str,
     version: &str,
     symmetric_algorithm: &str,
@@ -455,6 +328,7 @@ pub(crate) fn encrypt_message_to_recipient(
     session_key: Option<&[u8]>,
     anonymous_recipient: bool,
 ) -> PyResult<String> {
+    let recipient = public_recipient_from_python(py, recipient)?;
     let version = encryption_version_from_name(version)?;
     let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
     let aead_algorithm = aead_algorithm_from_name(aead_algorithm)?;
@@ -476,7 +350,7 @@ pub(crate) fn encrypt_message_to_recipient(
                     )?)
                     .map_err(to_py_err)?;
             }
-            encrypt_to_recipient!(builder, &recipient.inner, anonymous_recipient);
+            recipient.encrypt_to_message_builder_v1(&mut builder, anonymous_recipient)?;
             builder
                 .to_armored_string(rand::thread_rng(), ArmorOptions::default())
                 .map_err(to_py_err)
@@ -501,7 +375,7 @@ pub(crate) fn encrypt_message_to_recipient(
                     )?)
                     .map_err(to_py_err)?;
             }
-            encrypt_to_recipient!(builder, &recipient.inner, anonymous_recipient);
+            recipient.encrypt_to_message_builder_v2(&mut builder, anonymous_recipient)?;
             builder
                 .to_armored_string(rand::thread_rng(), ArmorOptions::default())
                 .map_err(to_py_err)
@@ -528,7 +402,7 @@ pub(crate) fn encrypt_message_to_recipient(
 pub(crate) fn encrypt_message_to_recipients_bytes(
     py: Python<'_>,
     data: &[u8],
-    recipients: Vec<Py<PublicKey>>,
+    recipients: Vec<Py<PyAny>>,
     file_name: &str,
     version: &str,
     symmetric_algorithm: &str,
@@ -537,7 +411,7 @@ pub(crate) fn encrypt_message_to_recipients_bytes(
     session_key: Option<&[u8]>,
     anonymous_recipient: bool,
 ) -> PyResult<Vec<u8>> {
-    let recipients = recipients_from_python(py, recipients)?;
+    let recipients = public_recipients_from_python(py, recipients)?;
     let version = encryption_version_from_name(version)?;
     let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
     let aead_algorithm = aead_algorithm_from_name(aead_algorithm)?;
@@ -560,7 +434,7 @@ pub(crate) fn encrypt_message_to_recipients_bytes(
                     .map_err(to_py_err)?;
             }
             for recipient in &recipients {
-                encrypt_to_recipient!(builder, recipient, anonymous_recipient);
+                recipient.encrypt_to_message_builder_v1(&mut builder, anonymous_recipient)?;
             }
             builder.to_vec(rand::thread_rng()).map_err(to_py_err)
         }
@@ -585,7 +459,7 @@ pub(crate) fn encrypt_message_to_recipients_bytes(
                     .map_err(to_py_err)?;
             }
             for recipient in &recipients {
-                encrypt_to_recipient!(builder, recipient, anonymous_recipient);
+                recipient.encrypt_to_message_builder_v2(&mut builder, anonymous_recipient)?;
             }
             builder.to_vec(rand::thread_rng()).map_err(to_py_err)
         }
@@ -611,7 +485,7 @@ pub(crate) fn encrypt_message_to_recipients_bytes(
 pub(crate) fn encrypt_message_to_recipients(
     py: Python<'_>,
     data: &[u8],
-    recipients: Vec<Py<PublicKey>>,
+    recipients: Vec<Py<PyAny>>,
     file_name: &str,
     version: &str,
     symmetric_algorithm: &str,
@@ -620,7 +494,7 @@ pub(crate) fn encrypt_message_to_recipients(
     session_key: Option<&[u8]>,
     anonymous_recipient: bool,
 ) -> PyResult<String> {
-    let recipients = recipients_from_python(py, recipients)?;
+    let recipients = public_recipients_from_python(py, recipients)?;
     let version = encryption_version_from_name(version)?;
     let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
     let aead_algorithm = aead_algorithm_from_name(aead_algorithm)?;
@@ -643,7 +517,7 @@ pub(crate) fn encrypt_message_to_recipients(
                     .map_err(to_py_err)?;
             }
             for recipient in &recipients {
-                encrypt_to_recipient!(builder, recipient, anonymous_recipient);
+                recipient.encrypt_to_message_builder_v1(&mut builder, anonymous_recipient)?;
             }
             builder
                 .to_armored_string(rand::thread_rng(), ArmorOptions::default())
@@ -670,7 +544,7 @@ pub(crate) fn encrypt_message_to_recipients(
                     .map_err(to_py_err)?;
             }
             for recipient in &recipients {
-                encrypt_to_recipient!(builder, recipient, anonymous_recipient);
+                recipient.encrypt_to_message_builder_v2(&mut builder, anonymous_recipient)?;
             }
             builder
                 .to_armored_string(rand::thread_rng(), ArmorOptions::default())
