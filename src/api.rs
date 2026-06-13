@@ -20,7 +20,7 @@ fn sign_message_with_signers(
         signer.apply_message_signature(&mut builder, password, hash_algorithm);
     }
     builder
-        .to_armored_string(&mut rand::thread_rng(), ArmorOptions::default())
+        .to_armored_string(rand::thread_rng(), ArmorOptions::default())
         .map_err(to_py_err)
 }
 
@@ -240,6 +240,7 @@ pub(crate) fn encrypt_session_key_with_password(
     session_key=None,
     anonymous_recipient=false,
 ))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encrypt_message_to_recipient_bytes(
     py: Python<'_>,
     data: &[u8],
@@ -316,6 +317,7 @@ pub(crate) fn encrypt_message_to_recipient_bytes(
     session_key=None,
     anonymous_recipient=false,
 ))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encrypt_message_to_recipient(
     py: Python<'_>,
     data: &[u8],
@@ -399,6 +401,7 @@ pub(crate) fn encrypt_message_to_recipient(
     session_key=None,
     anonymous_recipient=false,
 ))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encrypt_message_to_recipients_bytes(
     py: Python<'_>,
     data: &[u8],
@@ -482,6 +485,7 @@ pub(crate) fn encrypt_message_to_recipients_bytes(
     session_key=None,
     anonymous_recipient=false,
 ))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encrypt_message_to_recipients(
     py: Python<'_>,
     data: &[u8],
@@ -565,6 +569,7 @@ pub(crate) fn encrypt_message_to_recipients(
     compression=None,
     session_key=None,
 ))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encrypt_message_with_password_bytes(
     data: &[u8],
     password: &str,
@@ -646,6 +651,7 @@ pub(crate) fn encrypt_message_with_password_bytes(
     compression=None,
     session_key=None,
 ))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encrypt_message_with_password(
     data: &[u8],
     password: &str,

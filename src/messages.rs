@@ -185,12 +185,12 @@ fn select_verifier_for_signature<'a>(
 
     if let Some(issuer_fingerprint) = issuer_fingerprint {
         let verifier = verifier_for_issuer_fingerprint(certificate, issuer_fingerprint)?;
-        if let Some(issuer_key_id) = issuer_key_id {
-            if verifier.legacy_key_id() != *issuer_key_id {
-                return Err(to_py_err(
-                    "hashed issuer fingerprint and issuer key id refer to different certificate keys",
-                ));
-            }
+        if let Some(issuer_key_id) = issuer_key_id
+            && verifier.legacy_key_id() != *issuer_key_id
+        {
+            return Err(to_py_err(
+                "hashed issuer fingerprint and issuer key id refer to different certificate keys",
+            ));
         }
         return Ok(verifier);
     }

@@ -57,5 +57,12 @@ hooks = [
     entry = "cargo fmt",
     language = "system",
     pass_filenames = false
-    }
+    },
+    {
+    id = "rust-lint",
+    name = "rust lint",
+    entry = "cargo clippy --workspace -- --deny warnings",
+    language = "system",
+    pass_filenames = false
+    },
 ]

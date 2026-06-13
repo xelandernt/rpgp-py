@@ -200,8 +200,8 @@ fn apply_common_builder_options<R: Read, E: PgpEncryption>(
     builder
         .partial_chunk_size(partial_chunk_size)
         .map_err(to_py_err)?;
-    if let Some(compression) = compression.clone() {
-        builder.compression(compression);
+    if let Some(compression) = compression {
+        builder.compression(*compression);
     }
     builder
         .data_mode(match data_mode {
@@ -744,7 +744,7 @@ impl PyMessageBuilder {
         config.encryption = EncryptionConfig::SeipdV1 {
             symmetric_algorithm,
             session_key: symmetric_algorithm
-                .new_session_key(&mut rand::thread_rng())
+                .new_session_key(rand::thread_rng())
                 .as_ref()
                 .to_vec(),
             recipients: Vec::new(),
@@ -775,7 +775,7 @@ impl PyMessageBuilder {
                 None => ChunkSize::default(),
             },
             session_key: symmetric_algorithm
-                .new_session_key(&mut rand::thread_rng())
+                .new_session_key(rand::thread_rng())
                 .as_ref()
                 .to_vec(),
             recipients: Vec::new(),

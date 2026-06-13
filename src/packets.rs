@@ -133,9 +133,7 @@ impl SymKeyEncryptedSessionKeyPacket {
 
     #[getter]
     fn symmetric_algorithm(&self) -> Option<String> {
-        self.inner
-            .sym_algorithm()
-            .map(|algorithm| normalized_algorithm_name(algorithm))
+        self.inner.sym_algorithm().map(normalized_algorithm_name)
     }
 
     #[getter]
