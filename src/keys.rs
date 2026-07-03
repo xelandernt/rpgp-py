@@ -678,58 +678,6 @@ impl SecretSigner {
         }
     }
 
-    pub(crate) fn detached_binary_signature(
-        &self,
-        data: &[u8],
-        password: &Password,
-        hash_algorithm: HashAlgorithm,
-    ) -> PyResult<PgpDetachedSignature> {
-        match self {
-            Self::Certificate(signer) => PgpDetachedSignature::sign_binary_data(
-                rand::thread_rng(),
-                &signer.primary_key,
-                password,
-                hash_algorithm,
-                data,
-            )
-            .map_err(to_py_err),
-            Self::Subkey(subkey) => PgpDetachedSignature::sign_binary_data(
-                rand::thread_rng(),
-                &subkey.key,
-                password,
-                hash_algorithm,
-                data,
-            )
-            .map_err(to_py_err),
-        }
-    }
-
-    pub(crate) fn detached_text_signature(
-        &self,
-        text: &str,
-        password: &Password,
-        hash_algorithm: HashAlgorithm,
-    ) -> PyResult<PgpDetachedSignature> {
-        match self {
-            Self::Certificate(signer) => PgpDetachedSignature::sign_text_data(
-                rand::thread_rng(),
-                &signer.primary_key,
-                password,
-                hash_algorithm,
-                Cursor::new(text.as_bytes()),
-            )
-            .map_err(to_py_err),
-            Self::Subkey(subkey) => PgpDetachedSignature::sign_text_data(
-                rand::thread_rng(),
-                &subkey.key,
-                password,
-                hash_algorithm,
-                Cursor::new(text.as_bytes()),
-            )
-            .map_err(to_py_err),
-        }
-    }
-
     pub(crate) fn cleartext_signature(
         &self,
         text: &str,

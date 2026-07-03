@@ -11,6 +11,7 @@ use pgp::{
     types::{Fingerprint, VerifyingKey},
 };
 use pyo3::types::PyAny;
+use rand::{CryptoRng, RngCore};
 use std::{
     fs::{self, File},
     io::{BufReader, Read},
@@ -126,6 +127,48 @@ enum OwnedVerifier {
     Primary(PgpPublicKeyPacket),
     Subkey(PgpPublicSubkeyPacket),
 }
+
+struct PythonCryptoRng<'py> {
+    py: Python<'py>,
+    rng: Py<PyAny>,
+}
+
+impl RngCore for PythonCryptoRng<'_> {
+    fn next_u32(&mut self) -> u32 {
+        let mut bytes = [0; 4];
+        self.fill_bytes(&mut bytes);
+        u32::from_le_bytes(bytes)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut bytes = [0; 8];
+        self.fill_bytes(&mut bytes);
+        u64::from_le_bytes(bytes)
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        self.try_fill_bytes(dest)
+            .expect("python rng randbytes(n) failed");
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
+        let bytes = self
+            .rng
+            .bind(self.py)
+            .call_method1("randbytes", (dest.len(),))
+            .and_then(|value| value.extract::<Vec<u8>>())
+            .map_err(|error| rand::Error::new(std::io::Error::other(error.to_string())))?;
+        if bytes.len() != dest.len() {
+            return Err(rand::Error::new(std::io::Error::other(
+                "python rng returned the wrong number of bytes",
+            )));
+        }
+        dest.copy_from_slice(&bytes);
+        Ok(())
+    }
+}
+
+impl CryptoRng for PythonCryptoRng<'_> {}
 
 impl OwnedVerifier {
     fn verify_signature_reader<R>(&self, signature: &Signature, data: R) -> PyResult<()>
@@ -331,24 +374,6 @@ pub(crate) fn decrypted_message_from_parsed(
         literal_filename,
         signatures,
     })
-}
-
-pub(crate) fn detached_binary_signature_from_data(
-    data: &[u8],
-    signer: &SecretSigner,
-    password: &Password,
-    hash_algorithm: HashAlgorithm,
-) -> PyResult<PgpDetachedSignature> {
-    signer.detached_binary_signature(data, password, hash_algorithm)
-}
-
-pub(crate) fn detached_text_signature_from_text(
-    text: &str,
-    signer: &SecretSigner,
-    password: &Password,
-    hash_algorithm: HashAlgorithm,
-) -> PyResult<PgpDetachedSignature> {
-    signer.detached_text_signature(text, password, hash_algorithm)
 }
 
 pub(crate) fn cleartext_signed_message_from_signers(
@@ -600,21 +625,24 @@ impl Message {
     /// By default, this verifies the first signature on the message. Pass ``index`` to target a
     /// later signature in a multi-signed message.
     #[pyo3(signature = (key, index=0))]
-    fn verify(&self, key: PyRef<'_, PublicKey>, index: usize) -> PyResult<()> {
-        let _ = self.verify_signature(key, index)?;
-        Ok(())
+    fn verify(
+        &self,
+        key: PyRef<'_, PublicKey>,
+        index: usize,
+    ) -> PyResult<hierarchy::SignaturePacket> {
+        self.verify_signature(key, index)
     }
 
     /// Decrypt an encrypted message using a secret key and optional key-protection password.
     ///
     /// The returned :class:`DecryptedMessage` preserves signature-inspection and verification
     /// helpers so encrypted-and-signed messages can still be verified after decryption.
-    #[pyo3(signature = (key, password=None))]
+    #[pyo3(signature = (password, key))]
     fn decrypt(
         &self,
         py: Python<'_>,
-        key: PyRef<'_, SecretKey>,
         password: Option<&str>,
+        key: PyRef<'_, SecretKey>,
     ) -> PyResult<Py<PyAny>> {
         let key_password = password_from_option(password);
         let (message, _) = parse_message(&self.source).map_err(to_py_err)?;
@@ -861,9 +889,12 @@ impl DecryptedMessage {
     /// By default, this verifies the first signature on the decrypted payload. Pass ``index`` to
     /// target a later signature in a multi-signed payload.
     #[pyo3(signature = (key, index=0))]
-    fn verify(&self, key: PyRef<'_, PublicKey>, index: usize) -> PyResult<()> {
-        let _ = self.verify_signature(key, index)?;
-        Ok(())
+    fn verify(
+        &self,
+        key: PyRef<'_, PublicKey>,
+        index: usize,
+    ) -> PyResult<hierarchy::SignaturePacket> {
+        self.verify_signature(key, index)
     }
 
     fn __repr__(&self) -> String {
@@ -950,67 +981,80 @@ impl DetachedSignature {
         Ok((signatures, headers))
     }
 
-    /// Create a detached binary signature using the selected hash algorithm.
+    /// Create a detached binary signature using the Rust argument order.
+    ///
+    /// The ``rng`` argument must provide ``randbytes(n) -> bytes`` and is forwarded to rPGP.
     #[staticmethod]
-    #[pyo3(signature = (data, key, password=None, hash_algorithm="sha256"))]
-    fn sign_binary(
-        py: Python<'_>,
-        data: &[u8],
-        key: Py<PyAny>,
-        password: Option<&str>,
-        hash_algorithm: &str,
-    ) -> PyResult<Self> {
-        let password = password_from_option(password);
-        let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
-        let signer = secret_signer_from_python(py, key)?;
-        let inner = detached_binary_signature_from_data(data, &signer, &password, hash_algorithm)?;
-        Ok(Self { inner })
-    }
-
-    /// Rust-name alias for creating a detached binary signature.
-    #[staticmethod]
-    #[pyo3(signature = (data, key, password=None, hash_algorithm="sha256"))]
+    #[pyo3(signature = (rng, key, password, hash_algorithm, data))]
     fn sign_binary_data(
         py: Python<'_>,
+        rng: Py<PyAny>,
+        key: Py<PyAny>,
+        password: Option<&str>,
+        hash_algorithm: &str,
         data: &[u8],
-        key: Py<PyAny>,
-        password: Option<&str>,
-        hash_algorithm: &str,
-    ) -> PyResult<Self> {
-        Self::sign_binary(py, data, key, password, hash_algorithm)
-    }
-
-    /// Create a detached text signature over UTF-8 text.
-    ///
-    /// Text signatures normalize line endings during signing and verification, making them stable
-    /// across LF and CRLF representations of the same text.
-    #[staticmethod]
-    #[pyo3(signature = (text, key, password=None, hash_algorithm="sha256"))]
-    fn sign_text(
-        py: Python<'_>,
-        text: &str,
-        key: Py<PyAny>,
-        password: Option<&str>,
-        hash_algorithm: &str,
     ) -> PyResult<Self> {
         let password = password_from_option(password);
         let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
         let signer = secret_signer_from_python(py, key)?;
-        let inner = detached_text_signature_from_text(text, &signer, &password, hash_algorithm)?;
+        let rng = PythonCryptoRng { py, rng };
+        let inner = match signer {
+            SecretSigner::Certificate(signer) => PgpDetachedSignature::sign_binary_data(
+                rng,
+                &signer.primary_key,
+                &password,
+                hash_algorithm,
+                data,
+            )
+            .map_err(to_py_err),
+            SecretSigner::Subkey(subkey) => PgpDetachedSignature::sign_binary_data(
+                rng,
+                &subkey.key,
+                &password,
+                hash_algorithm,
+                data,
+            )
+            .map_err(to_py_err),
+        }?;
         Ok(Self { inner })
     }
 
-    /// Rust-name alias for creating a detached text signature.
+    /// Create a detached text signature using the Rust argument order.
+    ///
+    /// The ``rng`` argument must provide ``randbytes(n) -> bytes`` and is forwarded to rPGP.
     #[staticmethod]
-    #[pyo3(signature = (text, key, password=None, hash_algorithm="sha256"))]
+    #[pyo3(signature = (rng, key, password, hash_algorithm, data))]
     fn sign_text_data(
         py: Python<'_>,
-        text: &str,
+        rng: Py<PyAny>,
         key: Py<PyAny>,
         password: Option<&str>,
         hash_algorithm: &str,
+        data: &[u8],
     ) -> PyResult<Self> {
-        Self::sign_text(py, text, key, password, hash_algorithm)
+        let password = password_from_option(password);
+        let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
+        let signer = secret_signer_from_python(py, key)?;
+        let rng = PythonCryptoRng { py, rng };
+        let inner = match signer {
+            SecretSigner::Certificate(signer) => PgpDetachedSignature::sign_text_data(
+                rng,
+                &signer.primary_key,
+                &password,
+                hash_algorithm,
+                Cursor::new(data),
+            )
+            .map_err(to_py_err),
+            SecretSigner::Subkey(subkey) => PgpDetachedSignature::sign_text_data(
+                rng,
+                &subkey.key,
+                &password,
+                hash_algorithm,
+                Cursor::new(data),
+            )
+            .map_err(to_py_err),
+        }?;
+        Ok(Self { inner })
     }
 
     #[getter]
@@ -1205,9 +1249,12 @@ impl CleartextSignedMessage {
     ///
     /// If ``index`` is provided, only that signature packet is verified.
     #[pyo3(signature = (key, index=None))]
-    fn verify(&self, key: PyRef<'_, PublicKey>, index: Option<usize>) -> PyResult<()> {
-        let _ = self.verify_signature(key, index)?;
-        Ok(())
+    fn verify(
+        &self,
+        key: PyRef<'_, PublicKey>,
+        index: Option<usize>,
+    ) -> PyResult<hierarchy::SignaturePacket> {
+        self.verify_signature(key, index)
     }
 
     /// Serialize the cleartext signed message as ASCII armor.

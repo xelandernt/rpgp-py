@@ -1,25 +1,22 @@
 from collections.abc import Callable
 from pathlib import Path
-from typing import Final, Literal, NamedTuple
+from typing import Any, Final, Literal, NamedTuple
 
 import pytest
 
-from openpgp import (
+from openpgp.composed import (
     EncryptionCaps,
     KeyType,
     Message,
-    PacketHeaderVersion,
-    PublicKey,
-    SecretKey,
+    MessageBuilder,
     SecretKeyParamsBuilder,
-    SignaturePacket,
-    S2kParams,
-    StringToKey,
+    SignedPublicKey as PublicKey,
+    SignedSecretKey as SecretKey,
     SubkeyParamsBuilder,
-    UserAttribute,
-    encrypt_message_to_recipient,
-    sign_message,
 )
+from openpgp.packet import Signature as SignaturePacket
+from openpgp.packet import UserAttribute
+from openpgp.types import PacketHeaderVersion, S2kParams, StringToKey
 
 
 SymmetricPreferenceName = Literal["aes128", "aes192", "aes256"]
@@ -51,6 +48,33 @@ JPEG_USER_ATTRIBUTE_DATA: Final[bytes] = bytes.fromhex("ffd8ffe000104a4649460001
 FIXED_PRIMARY_CREATED_AT: Final[int] = 1_700_000_000
 FIXED_SUBKEY_CREATED_AT: Final[int] = FIXED_PRIMARY_CREATED_AT + 123
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def _sign_message(
+    data: bytes,
+    signer: Any,
+    password: str | None = None,
+    file_name: str = "",
+    hash_algorithm: Any = "sha256",
+) -> str:
+    return (
+        MessageBuilder.from_bytes(file_name, data)
+        .sign(signer, password, hash_algorithm)
+        .to_armored_string()
+    )
+
+
+def _encrypt_message_to_recipient(
+    data: bytes,
+    recipient: Any,
+    file_name: str = "",
+) -> str:
+    return (
+        MessageBuilder.from_bytes(file_name, data)
+        .seipd_v2("aes256", "ocb")
+        .encrypt_to_key(recipient)
+        .to_armored_string()
+    )
 
 
 class PacketHeaderInfo(NamedTuple):
@@ -163,14 +187,14 @@ def test_generate_ed25519_x25519_key_roundtrips(version: KeyVersion) -> None:
     reparsed_public.verify_bindings()
     assert reparsed_public.fingerprint == public_key.fingerprint
 
-    signed = sign_message(b"generated payload", reparsed_secret)
+    signed = _sign_message(b"generated payload", reparsed_secret)
     signed_message, _ = Message.from_armor(signed)
     signed_message.verify(reparsed_public)
     assert signed_message.payload_bytes() == b"generated payload"
 
-    encrypted = encrypt_message_to_recipient(b"hello world", reparsed_public)
+    encrypted = _encrypt_message_to_recipient(b"hello world", reparsed_public)
     encrypted_message, _ = Message.from_armor(encrypted)
-    decrypted = encrypted_message.decrypt(reparsed_secret)
+    decrypted = encrypted_message.decrypt(None, reparsed_secret)
     assert decrypted.payload_bytes() == b"hello world"
 
 
@@ -201,9 +225,9 @@ def test_generate_legacy_curve25519_key_matches_docs_example() -> None:
     public_key.verify_bindings()
     assert public_key.user_ids == ["Me <me@example.com>"]
 
-    encrypted = encrypt_message_to_recipient(b"Hello World", public_key)
+    encrypted = _encrypt_message_to_recipient(b"Hello World", public_key)
     encrypted_message, _ = Message.from_armor(encrypted)
-    decrypted = encrypted_message.decrypt(secret_key)
+    decrypted = encrypted_message.decrypt(None, secret_key)
     assert decrypted.payload_bytes() == b"Hello World"
 
 
@@ -530,17 +554,17 @@ def test_generate_passphrase_protected_key_requires_password_for_signing() -> No
     reparsed_secret, _ = SecretKey.from_armor(protected_key.to_armored())
 
     with pytest.raises(ValueError):
-        sign_message(b"payload", reparsed_secret)
+        _sign_message(b"payload", reparsed_secret)
 
-    armored = sign_message(b"payload", reparsed_secret, password="hello")
+    armored = _sign_message(b"payload", reparsed_secret, password="hello")
     message, _ = Message.from_armor(armored)
     message.verify(public_key)
     assert message.payload_bytes() == b"payload"
 
-    encrypted = encrypt_message_to_recipient(b"secret", public_key)
+    encrypted = _encrypt_message_to_recipient(b"secret", public_key)
     encrypted_message, _ = Message.from_armor(encrypted)
     assert (
-        encrypted_message.decrypt(reparsed_secret, "hello").payload_bytes() == b"secret"
+        encrypted_message.decrypt("hello", reparsed_secret).payload_bytes() == b"secret"
     )
 
 
@@ -1130,15 +1154,15 @@ def test_generate_passphrase_protected_key_supports_explicit_v4_cfb_s2k() -> Non
     assert subkey_string_to_key.parallelism is None
     assert subkey_string_to_key.memory_exponent is None
 
-    armored = sign_message(b"payload", reparsed_secret, password="hello")
+    armored = _sign_message(b"payload", reparsed_secret, password="hello")
     message, _ = Message.from_armor(armored)
     message.verify(public_key)
     assert message.payload_bytes() == b"payload"
 
-    encrypted = encrypt_message_to_recipient(b"secret", public_key)
+    encrypted = _encrypt_message_to_recipient(b"secret", public_key)
     encrypted_message, _ = Message.from_armor(encrypted)
     assert (
-        encrypted_message.decrypt(reparsed_secret, "hello").payload_bytes() == b"secret"
+        encrypted_message.decrypt("hello", reparsed_secret).payload_bytes() == b"secret"
     )
 
 
@@ -1227,15 +1251,15 @@ def test_generate_passphrase_protected_key_supports_explicit_v6_aead_s2k() -> No
     assert subkey_string_to_key.parallelism == 2
     assert subkey_string_to_key.memory_exponent == 18
 
-    armored = sign_message(b"payload", reparsed_secret, password="hello")
+    armored = _sign_message(b"payload", reparsed_secret, password="hello")
     message, _ = Message.from_armor(armored)
     message.verify(public_key)
     assert message.payload_bytes() == b"payload"
 
-    encrypted = encrypt_message_to_recipient(b"secret", public_key)
+    encrypted = _encrypt_message_to_recipient(b"secret", public_key)
     encrypted_message, _ = Message.from_armor(encrypted)
     assert (
-        encrypted_message.decrypt(reparsed_secret, "hello").payload_bytes() == b"secret"
+        encrypted_message.decrypt("hello", reparsed_secret).payload_bytes() == b"secret"
     )
 
 

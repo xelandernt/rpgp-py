@@ -96,11 +96,10 @@ struct SignatureConfig {
     hash_algorithm: HashAlgorithm,
 }
 
-#[derive(Clone)]
 enum MessageBuilderSource {
     Bytes { name: String, data: Vec<u8> },
     File(PathBuf),
-    Reader { name: String, data: Vec<u8> },
+    Reader { name: String, reader: Py<PyAny> },
 }
 
 #[derive(Clone)]
@@ -134,7 +133,6 @@ enum MessageBuilderSignatureType {
     Text,
 }
 
-#[derive(Clone)]
 struct MessageBuilderConfig {
     source: MessageBuilderSource,
     compression: Option<CompressionAlgorithm>,
@@ -227,9 +225,22 @@ fn ensure_parent_dir(path: &Path) -> PyResult<()> {
     Ok(())
 }
 
-fn read_bytes_from_python_reader(py: Python<'_>, reader: Py<PyAny>) -> PyResult<Vec<u8>> {
-    let reader = reader.bind(py);
-    reader.call_method0("read")?.extract::<Vec<u8>>()
+struct PythonReader<'py> {
+    py: Python<'py>,
+    reader: Py<PyAny>,
+}
+
+impl Read for PythonReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let reader = self.reader.bind(self.py);
+        let chunk = reader
+            .call_method1("read", (buf.len(),))
+            .and_then(|value| value.extract::<Vec<u8>>())
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let len = chunk.len().min(buf.len());
+        buf[..len].copy_from_slice(&chunk[..len]);
+        Ok(len)
+    }
 }
 
 fn write_bytes_to_python_writer(py: Python<'_>, writer: Py<PyAny>, data: &[u8]) -> PyResult<()> {
@@ -314,7 +325,7 @@ fn apply_recipients_v2<'a, R: Read>(
     Ok(())
 }
 
-fn build_binary_message(config: MessageBuilderConfig) -> PyResult<Vec<u8>> {
+fn build_binary_message(py: Python<'_>, config: MessageBuilderConfig) -> PyResult<Vec<u8>> {
     let MessageBuilderConfig {
         source,
         compression,
@@ -326,8 +337,7 @@ fn build_binary_message(config: MessageBuilderConfig) -> PyResult<Vec<u8>> {
     } = config;
 
     match source {
-        MessageBuilderSource::Bytes { name, data }
-        | MessageBuilderSource::Reader { name, data } => match encryption {
+        MessageBuilderSource::Bytes { name, data } => match encryption {
             EncryptionConfig::Plaintext => {
                 let mut builder = PgpMessageBuilder::from_bytes(name, data);
                 apply_common_builder_options(
@@ -399,6 +409,81 @@ fn build_binary_message(config: MessageBuilderConfig) -> PyResult<Vec<u8>> {
                 builder.to_vec(rand::thread_rng()).map_err(to_py_err)
             }
         },
+        MessageBuilderSource::Reader { name, reader } => {
+            let reader = PythonReader { py, reader };
+            match encryption {
+                EncryptionConfig::Plaintext => {
+                    let mut builder = PgpMessageBuilder::from_reader(name, reader);
+                    apply_common_builder_options(
+                        &mut builder,
+                        partial_chunk_size,
+                        &compression,
+                        data_mode,
+                        signature_type,
+                    )?;
+                    apply_signatures(&mut builder, &signatures);
+                    builder.to_vec(rand::thread_rng()).map_err(to_py_err)
+                }
+                EncryptionConfig::SeipdV1 {
+                    symmetric_algorithm,
+                    session_key,
+                    recipients,
+                    passwords,
+                } => {
+                    let mut builder = PgpMessageBuilder::from_reader(name, reader)
+                        .seipd_v1(rand::thread_rng(), symmetric_algorithm);
+                    apply_common_builder_options(
+                        &mut builder,
+                        partial_chunk_size,
+                        &compression,
+                        data_mode,
+                        signature_type,
+                    )?;
+                    apply_signatures(&mut builder, &signatures);
+                    builder
+                        .set_session_key(raw_session_key_from_bytes(
+                            &session_key,
+                            symmetric_algorithm,
+                        )?)
+                        .map_err(to_py_err)?;
+                    apply_recipients_v1(&mut builder, &recipients)?;
+                    apply_passwords_v1(&mut builder, &passwords)?;
+                    builder.to_vec(rand::thread_rng()).map_err(to_py_err)
+                }
+                EncryptionConfig::SeipdV2 {
+                    symmetric_algorithm,
+                    aead_algorithm,
+                    chunk_size,
+                    session_key,
+                    recipients,
+                    passwords,
+                } => {
+                    let mut builder = PgpMessageBuilder::from_reader(name, reader).seipd_v2(
+                        rand::thread_rng(),
+                        symmetric_algorithm,
+                        aead_algorithm,
+                        chunk_size,
+                    );
+                    apply_common_builder_options(
+                        &mut builder,
+                        partial_chunk_size,
+                        &compression,
+                        data_mode,
+                        signature_type,
+                    )?;
+                    apply_signatures(&mut builder, &signatures);
+                    builder
+                        .set_session_key(raw_session_key_from_bytes(
+                            &session_key,
+                            symmetric_algorithm,
+                        )?)
+                        .map_err(to_py_err)?;
+                    apply_recipients_v2(&mut builder, &recipients)?;
+                    apply_passwords_v2(&mut builder, &passwords)?;
+                    builder.to_vec(rand::thread_rng()).map_err(to_py_err)
+                }
+            }
+        }
         MessageBuilderSource::File(path) => match encryption {
             EncryptionConfig::Plaintext => {
                 let mut builder = PgpMessageBuilder::from_file(path);
@@ -475,6 +560,7 @@ fn build_binary_message(config: MessageBuilderConfig) -> PyResult<Vec<u8>> {
 }
 
 fn build_armored_message(
+    py: Python<'_>,
     config: MessageBuilderConfig,
     armor_options: PgpArmorOptions<'_>,
 ) -> PyResult<String> {
@@ -489,8 +575,7 @@ fn build_armored_message(
     } = config;
 
     match source {
-        MessageBuilderSource::Bytes { name, data }
-        | MessageBuilderSource::Reader { name, data } => match encryption {
+        MessageBuilderSource::Bytes { name, data } => match encryption {
             EncryptionConfig::Plaintext => {
                 let mut builder = PgpMessageBuilder::from_bytes(name, data);
                 apply_common_builder_options(
@@ -568,6 +653,87 @@ fn build_armored_message(
                     .map_err(to_py_err)
             }
         },
+        MessageBuilderSource::Reader { name, reader } => {
+            let reader = PythonReader { py, reader };
+            match encryption {
+                EncryptionConfig::Plaintext => {
+                    let mut builder = PgpMessageBuilder::from_reader(name, reader);
+                    apply_common_builder_options(
+                        &mut builder,
+                        partial_chunk_size,
+                        &compression,
+                        data_mode,
+                        signature_type,
+                    )?;
+                    apply_signatures(&mut builder, &signatures);
+                    builder
+                        .to_armored_string(rand::thread_rng(), armor_options)
+                        .map_err(to_py_err)
+                }
+                EncryptionConfig::SeipdV1 {
+                    symmetric_algorithm,
+                    session_key,
+                    recipients,
+                    passwords,
+                } => {
+                    let mut builder = PgpMessageBuilder::from_reader(name, reader)
+                        .seipd_v1(rand::thread_rng(), symmetric_algorithm);
+                    apply_common_builder_options(
+                        &mut builder,
+                        partial_chunk_size,
+                        &compression,
+                        data_mode,
+                        signature_type,
+                    )?;
+                    apply_signatures(&mut builder, &signatures);
+                    builder
+                        .set_session_key(raw_session_key_from_bytes(
+                            &session_key,
+                            symmetric_algorithm,
+                        )?)
+                        .map_err(to_py_err)?;
+                    apply_recipients_v1(&mut builder, &recipients)?;
+                    apply_passwords_v1(&mut builder, &passwords)?;
+                    builder
+                        .to_armored_string(rand::thread_rng(), armor_options)
+                        .map_err(to_py_err)
+                }
+                EncryptionConfig::SeipdV2 {
+                    symmetric_algorithm,
+                    aead_algorithm,
+                    chunk_size,
+                    session_key,
+                    recipients,
+                    passwords,
+                } => {
+                    let mut builder = PgpMessageBuilder::from_reader(name, reader).seipd_v2(
+                        rand::thread_rng(),
+                        symmetric_algorithm,
+                        aead_algorithm,
+                        chunk_size,
+                    );
+                    apply_common_builder_options(
+                        &mut builder,
+                        partial_chunk_size,
+                        &compression,
+                        data_mode,
+                        signature_type,
+                    )?;
+                    apply_signatures(&mut builder, &signatures);
+                    builder
+                        .set_session_key(raw_session_key_from_bytes(
+                            &session_key,
+                            symmetric_algorithm,
+                        )?)
+                        .map_err(to_py_err)?;
+                    apply_recipients_v2(&mut builder, &recipients)?;
+                    apply_passwords_v2(&mut builder, &passwords)?;
+                    builder
+                        .to_armored_string(rand::thread_rng(), armor_options)
+                        .map_err(to_py_err)
+                }
+            }
+        }
         MessageBuilderSource::File(path) => match encryption {
             EncryptionConfig::Plaintext => {
                 let mut builder = PgpMessageBuilder::from_file(path);
@@ -689,10 +855,13 @@ impl PyMessageBuilder {
 
     #[staticmethod]
     fn from_reader(py: Python<'_>, file_name: &str, reader: Py<PyAny>) -> PyResult<Self> {
+        if !reader.bind(py).hasattr("read")? {
+            return Err(to_py_err("reader must expose a read(size) method"));
+        }
         Ok(Self {
             state: Some(MessageBuilderConfig::new(MessageBuilderSource::Reader {
                 name: file_name.to_string(),
-                data: read_bytes_from_python_reader(py, reader)?,
+                reader,
             })),
         })
     }
@@ -904,20 +1073,21 @@ impl PyMessageBuilder {
         }
     }
 
-    fn to_vec(mut slf: PyRefMut<'_, Self>) -> PyResult<Vec<u8>> {
+    fn to_vec(mut slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<Vec<u8>> {
         let config = slf.take_config()?;
-        build_binary_message(config)
+        build_binary_message(py, config)
     }
 
     fn to_writer(mut slf: PyRefMut<'_, Self>, py: Python<'_>, writer: Py<PyAny>) -> PyResult<()> {
         let config = slf.take_config()?;
-        let data = build_binary_message(config)?;
+        let data = build_binary_message(py, config)?;
         write_bytes_to_python_writer(py, writer, &data)
     }
 
     #[pyo3(signature = (opts=None))]
     fn to_armored_string(
         mut slf: PyRefMut<'_, Self>,
+        py: Python<'_>,
         opts: Option<PyRef<'_, PyArmorOptions>>,
     ) -> PyResult<String> {
         let config = slf.take_config()?;
@@ -926,6 +1096,7 @@ impl PyMessageBuilder {
             None => (None, true),
         };
         build_armored_message(
+            py,
             config,
             PgpArmorOptions {
                 headers: headers.as_ref(),
@@ -947,6 +1118,7 @@ impl PyMessageBuilder {
             None => (None, true),
         };
         let armored = build_armored_message(
+            py,
             config,
             PgpArmorOptions {
                 headers: headers.as_ref(),
@@ -956,8 +1128,8 @@ impl PyMessageBuilder {
         write_text_to_python_writer(py, writer, &armored)
     }
 
-    fn to_file(mut slf: PyRefMut<'_, Self>, path: PathBuf) -> PyResult<()> {
-        let data = build_binary_message(slf.take_config()?)?;
+    fn to_file(mut slf: PyRefMut<'_, Self>, py: Python<'_>, path: PathBuf) -> PyResult<()> {
+        let data = build_binary_message(py, slf.take_config()?)?;
         ensure_parent_dir(&path)?;
         fs::write(path, data).map_err(to_py_err)
     }
@@ -965,6 +1137,7 @@ impl PyMessageBuilder {
     #[pyo3(signature = (path, opts=None))]
     fn to_armored_file(
         mut slf: PyRefMut<'_, Self>,
+        py: Python<'_>,
         path: PathBuf,
         opts: Option<PyRef<'_, PyArmorOptions>>,
     ) -> PyResult<()> {
@@ -974,6 +1147,7 @@ impl PyMessageBuilder {
             None => (None, true),
         };
         let armored = build_armored_message(
+            py,
             config,
             PgpArmorOptions {
                 headers: headers.as_ref(),

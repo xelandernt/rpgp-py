@@ -1,0 +1,41 @@
+"""rPGP ``pgp::packet`` compatibility namespace."""
+
+from ._openpgp import (
+    EncryptedDataPacket,
+    Features,
+    GnupgAeadDataPacket as GnupgAeadData,
+    KeyFlags,
+    LiteralDataHeader,
+    Notation,
+    PublicKeyEncryptedSessionKeyPacket as PublicKeyEncryptedSessionKey,
+    PublicKeyPacket as PublicKey,
+    PublicSubkeyPacket as PublicSubkey,
+    RevocationKey,
+    SecretKeyPacket as SecretKey,
+    SecretSubkeyPacket as SecretSubkey,
+    SignaturePacket as Signature,
+    SymEncryptedDataPacket as SymEncryptedData,
+    SymEncryptedProtectedDataPacket as SymEncryptedProtectedData,
+    SymKeyEncryptedSessionKeyPacket as SymKeyEncryptedSessionKey,
+    UserAttribute,
+)
+
+__all__ = [
+    "EncryptedDataPacket",
+    "Features",
+    "GnupgAeadData",
+    "KeyFlags",
+    "LiteralDataHeader",
+    "Notation",
+    "PublicKey",
+    "PublicKeyEncryptedSessionKey",
+    "PublicSubkey",
+    "RevocationKey",
+    "SecretKey",
+    "SecretSubkey",
+    "Signature",
+    "SymEncryptedData",
+    "SymEncryptedProtectedData",
+    "SymKeyEncryptedSessionKey",
+    "UserAttribute",
+]

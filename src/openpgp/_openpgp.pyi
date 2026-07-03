@@ -1,5 +1,16 @@
 from os import PathLike
-from typing import BinaryIO, Dict, List, Literal, Optional, TextIO, Tuple, TypeAlias, Union
+from typing import (
+    BinaryIO,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Protocol,
+    TextIO,
+    Tuple,
+    TypeAlias,
+    Union,
+)
 
 FilePath: TypeAlias = Union[str, PathLike[str]]
 Headers: TypeAlias = Dict[str, List[str]]
@@ -85,6 +96,9 @@ PublicParamsKindName: TypeAlias = Literal[
 ]
 EncryptionRecipient: TypeAlias = Union[PublicKey, SignedPublicSubKey]
 SigningKey: TypeAlias = Union[SecretKey, SignedSecretSubKey]
+
+class CryptoRng(Protocol):
+    def randbytes(self, n: int) -> bytes: ...
 
 class PacketHeaderVersion:
     @staticmethod
@@ -788,9 +802,9 @@ class Message:
     ) -> List[SymKeyEncryptedSessionKeyPacket]: ...
     def encrypted_data_packet(self) -> EncryptedDataPacket: ...
     def verify_signature(self, key: PublicKey, index: int = 0) -> SignaturePacket: ...
-    def verify(self, key: PublicKey, index: int = 0) -> None: ...
+    def verify(self, key: PublicKey, index: int = 0) -> SignaturePacket: ...
     def decrypt(
-        self, key: SecretKey, password: Optional[str] = None
+        self, password: Optional[str], key: SecretKey
     ) -> DecryptedMessage: ...
     def decrypt_with_password(self, password: str) -> DecryptedMessage: ...
     def decrypt_with_session_key(
@@ -831,7 +845,7 @@ class DecryptedMessage:
     def regular_signature_count(self) -> int: ...
     def signatures(self) -> List[SignaturePacket]: ...
     def verify_signature(self, key: PublicKey, index: int = 0) -> SignaturePacket: ...
-    def verify(self, key: PublicKey, index: int = 0) -> None: ...
+    def verify(self, key: PublicKey, index: int = 0) -> SignaturePacket: ...
 
 class DecryptedLiteralMessage(DecryptedMessage): ...
 class DecryptedCompressedMessage(DecryptedMessage): ...
@@ -855,32 +869,20 @@ class DetachedSignature:
     @staticmethod
     def from_armor_file_many(path: FilePath) -> Tuple[List[DetachedSignature], Headers]: ...
     @staticmethod
-    def sign_binary(
-        data: bytes,
-        key: SigningKey,
-        password: Optional[str] = None,
-        hash_algorithm: HashAlgorithmName = "sha256",
-    ) -> DetachedSignature: ...
-    @staticmethod
     def sign_binary_data(
+        rng: CryptoRng,
+        key: SigningKey,
+        password: Optional[str],
+        hash_algorithm: HashAlgorithmName,
         data: bytes,
-        key: SigningKey,
-        password: Optional[str] = None,
-        hash_algorithm: HashAlgorithmName = "sha256",
-    ) -> DetachedSignature: ...
-    @staticmethod
-    def sign_text(
-        text: str,
-        key: SigningKey,
-        password: Optional[str] = None,
-        hash_algorithm: HashAlgorithmName = "sha256",
     ) -> DetachedSignature: ...
     @staticmethod
     def sign_text_data(
-        text: str,
+        rng: CryptoRng,
         key: SigningKey,
-        password: Optional[str] = None,
-        hash_algorithm: HashAlgorithmName = "sha256",
+        password: Optional[str],
+        hash_algorithm: HashAlgorithmName,
+        data: bytes,
     ) -> DetachedSignature: ...
     @property
     def signature(self) -> SignaturePacket: ...
@@ -911,7 +913,9 @@ class CleartextSignedMessage:
     def verify_signature(
         self, key: PublicKey, index: Optional[int] = None
     ) -> SignaturePacket: ...
-    def verify(self, key: PublicKey, index: Optional[int] = None) -> None: ...
+    def verify(
+        self, key: PublicKey, index: Optional[int] = None
+    ) -> SignaturePacket: ...
     def to_armored(self) -> str: ...
 
 class MessageInfo:
