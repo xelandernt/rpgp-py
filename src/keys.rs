@@ -1,5 +1,11 @@
 use crate::conversions::*;
-use crate::info::*;
+use crate::hierarchy::{
+    PublicKeyPacket, SecretKeyPacket, SignedKeyDetails, SignedPublicSubKey as PySignedPublicSubKey,
+    SignedSecretSubKey as PySignedSecretSubKey, public_key_packet_object, public_params_object,
+    secret_key_packet_object, signed_key_details_from_raw, signed_public_subkey_from_raw,
+    signed_secret_subkey_from_raw,
+};
+use crate::info::{lossy_user_ids, public_key_algorithm_name};
 use crate::key_params::*;
 use crate::serialization::*;
 use crate::*;
@@ -117,8 +123,8 @@ impl PublicKey {
 
     /// Structured algorithm-specific public-key metadata from `KeyDetails.public_params()`.
     #[getter]
-    fn public_params(&self) -> PublicParamsInfo {
-        public_params_info_from_params(self.inner.primary_key.public_params())
+    fn public_params(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        public_params_object(py, self.inner.primary_key.public_params())
     }
 
     /// The RFC 9580 packet-header framing used by the primary key packet.
@@ -135,57 +141,31 @@ impl PublicKey {
         self.inner.public_subkeys.len()
     }
 
+    /// The primary key packet.
+    #[getter]
+    fn primary_key(&self, py: Python<'_>) -> PyResult<Py<PublicKeyPacket>> {
+        public_key_packet_object(py, &self.inner.primary_key)
+    }
+
+    /// Shared key details, user bindings, and direct signatures.
+    #[getter]
+    fn details(&self) -> SignedKeyDetails {
+        signed_key_details_from_raw(&self.inner.details)
+    }
+
     /// UTF-8 decoded user IDs, with invalid octets replaced lossily.
     #[getter]
     fn user_ids(&self) -> Vec<String> {
         lossy_user_ids(&self.inner.details)
     }
 
-    /// Return direct-key self-signature metadata attached to the certificate.
-    ///
-    /// RFC 9580 version-6 certificates place certificate-wide preferences, key flags, and
-    /// feature advertisements on these direct-key signatures.
-    fn direct_signature_infos(&self) -> Vec<SignatureInfo> {
-        direct_signature_infos_from_details(&self.inner.details)
-    }
-
-    /// Return key-revocation signatures attached directly to the certificate.
-    ///
-    /// These signatures are separate from direct-key signatures and from user or subkey bindings.
-    fn revocation_signature_infos(&self) -> Vec<SignatureInfo> {
-        revocation_signature_infos_from_details(&self.inner.details)
-    }
-
-    /// Return user IDs together with their certification self-signatures.
-    ///
-    /// Version-4 certificates carry certificate metadata such as key flags and preferred
-    /// algorithms on the primary user-ID binding signature.
-    fn user_bindings(&self) -> Vec<UserBindingInfo> {
-        user_binding_infos_from_details(&self.inner.details)
-    }
-
-    /// Return user attributes together with their certification self-signatures.
-    fn user_attribute_bindings(&self) -> Vec<UserAttributeBindingInfo> {
-        user_attribute_binding_infos_from_details(&self.inner.details)
-    }
-
-    /// Return public subkeys together with their binding-signature metadata.
-    fn subkey_bindings(&self) -> Vec<SubkeyBindingInfo> {
-        self.inner
-            .public_subkeys
-            .iter()
-            .map(subkey_binding_info_from_signed_public_subkey)
-            .collect::<Vec<_>>()
-    }
-
     /// The public subkey objects attached to the certificate.
     #[getter]
-    fn public_subkeys(&self) -> Vec<PublicSubkey> {
+    fn public_subkeys(&self, py: Python<'_>) -> PyResult<Vec<PySignedPublicSubKey>> {
         self.inner
             .public_subkeys
             .iter()
-            .cloned()
-            .map(|inner| PublicSubkey { inner })
+            .map(|subkey| signed_public_subkey_from_raw(py, subkey))
             .collect()
     }
 
@@ -330,8 +310,8 @@ impl SecretKey {
 
     /// Structured algorithm-specific public-key metadata from `KeyDetails.public_params()`.
     #[getter]
-    fn public_params(&self) -> PublicParamsInfo {
-        public_params_info_from_params(self.inner.primary_key.public_params())
+    fn public_params(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        public_params_object(py, self.inner.primary_key.public_params())
     }
 
     /// The RFC 9580 packet-header framing used by the primary secret-key packet.
@@ -354,69 +334,22 @@ impl SecretKey {
         self.inner.secret_subkeys.len()
     }
 
+    /// The primary secret-key packet.
+    #[getter]
+    fn primary_key(&self, py: Python<'_>) -> PyResult<Py<SecretKeyPacket>> {
+        secret_key_packet_object(py, &self.inner.primary_key)
+    }
+
+    /// Shared key details, user bindings, and direct signatures.
+    #[getter]
+    fn details(&self) -> SignedKeyDetails {
+        signed_key_details_from_raw(&self.inner.details)
+    }
+
     /// UTF-8 decoded user IDs, with invalid octets replaced lossily.
     #[getter]
     fn user_ids(&self) -> Vec<String> {
         lossy_user_ids(&self.inner.details)
-    }
-
-    /// Return direct-key self-signature metadata attached to the secret certificate.
-    ///
-    /// RFC 9580 version-6 certificates place certificate-wide preferences, key flags, and
-    /// feature advertisements on these direct-key signatures.
-    fn direct_signature_infos(&self) -> Vec<SignatureInfo> {
-        direct_signature_infos_from_details(&self.inner.details)
-    }
-
-    /// Return key-revocation signatures attached directly to the secret certificate.
-    ///
-    /// These signatures are separate from direct-key signatures and from user or subkey bindings.
-    fn revocation_signature_infos(&self) -> Vec<SignatureInfo> {
-        revocation_signature_infos_from_details(&self.inner.details)
-    }
-
-    /// Return user IDs together with their certification self-signatures.
-    ///
-    /// Version-4 certificates carry certificate metadata such as key flags and preferred
-    /// algorithms on the primary user-ID binding signature.
-    fn user_bindings(&self) -> Vec<UserBindingInfo> {
-        user_binding_infos_from_details(&self.inner.details)
-    }
-
-    /// Return user attributes together with their certification self-signatures.
-    fn user_attribute_bindings(&self) -> Vec<UserAttributeBindingInfo> {
-        user_attribute_binding_infos_from_details(&self.inner.details)
-    }
-
-    /// Return secret subkeys together with their binding-signature metadata.
-    fn subkey_bindings(&self) -> Vec<SubkeyBindingInfo> {
-        self.inner
-            .secret_subkeys
-            .iter()
-            .map(subkey_binding_info_from_signed_secret_subkey)
-            .collect::<Vec<_>>()
-    }
-
-    /// The public subkey views attached to the secret certificate.
-    #[getter]
-    fn public_subkeys(&self) -> Vec<PublicSubkey> {
-        self.inner
-            .public_subkeys
-            .iter()
-            .cloned()
-            .map(|inner| PublicSubkey { inner })
-            .collect()
-    }
-
-    /// The secret subkey objects attached to the certificate.
-    #[getter]
-    fn secret_subkeys(&self) -> Vec<SecretSubkey> {
-        self.inner
-            .secret_subkeys
-            .iter()
-            .cloned()
-            .map(|inner| SecretSubkey { inner })
-            .collect()
     }
 
     /// Return the primary secret key packet's RFC 9580 S2K protection parameters.
@@ -424,6 +357,26 @@ impl SecretKey {
     /// Unprotected keys return an ``S2kParams`` instance with usage ``"unprotected"``.
     fn primary_secret_s2k(&self) -> PyS2kParams {
         s2k_params_from_secret_params(self.inner.primary_key.secret_params())
+    }
+
+    /// The public subkey views attached to the secret certificate.
+    #[getter]
+    fn public_subkeys(&self, py: Python<'_>) -> PyResult<Vec<PySignedPublicSubKey>> {
+        self.inner
+            .public_subkeys
+            .iter()
+            .map(|subkey| signed_public_subkey_from_raw(py, subkey))
+            .collect()
+    }
+
+    /// The secret subkey objects attached to the certificate.
+    #[getter]
+    fn secret_subkeys(&self, py: Python<'_>) -> PyResult<Vec<PySignedSecretSubKey>> {
+        self.inner
+            .secret_subkeys
+            .iter()
+            .map(|subkey| signed_secret_subkey_from_raw(py, subkey))
+            .collect()
     }
 
     /// Return RFC 9580 S2K protection parameters for each secret subkey packet.
@@ -462,151 +415,6 @@ impl SecretKey {
     fn __repr__(&self) -> String {
         format!(
             "SecretKey(fingerprint='{}', key_id='{}')",
-            self.fingerprint(),
-            self.key_id()
-        )
-    }
-}
-
-/// A signed OpenPGP public subkey together with its binding signatures.
-#[pyclass(module = "openpgp", from_py_object)]
-#[derive(Clone)]
-pub(crate) struct PublicSubkey {
-    pub(crate) inner: SignedPublicSubKey,
-}
-
-#[pymethods]
-impl PublicSubkey {
-    #[getter]
-    fn fingerprint(&self) -> String {
-        self.inner.fingerprint().to_string()
-    }
-
-    #[getter]
-    fn key_id(&self) -> String {
-        self.inner.legacy_key_id().to_string()
-    }
-
-    #[getter]
-    fn version(&self) -> u8 {
-        key_version_number(self.inner.key.version())
-    }
-
-    #[getter]
-    fn created_at(&self) -> u32 {
-        self.inner.key.created_at().as_secs()
-    }
-
-    #[getter]
-    fn public_key_algorithm(&self) -> String {
-        public_key_algorithm_name(self.inner.key.algorithm()).to_string()
-    }
-
-    #[getter]
-    fn public_params(&self) -> PublicParamsInfo {
-        public_params_info_from_params(self.inner.key.public_params())
-    }
-
-    #[getter]
-    fn packet_version(&self) -> PyPacketHeaderVersion {
-        PyPacketHeaderVersion {
-            inner: self.inner.key.packet_header_version(),
-        }
-    }
-
-    /// The binding and revocation signatures attached to this subkey packet.
-    #[getter]
-    fn signatures(&self) -> Vec<SignatureInfo> {
-        self.inner
-            .signatures
-            .iter()
-            .map(|signature| signature_info_from_signature(signature, false))
-            .collect()
-    }
-
-    fn to_bytes(&self) -> PyResult<Vec<u8>> {
-        self.inner.to_bytes().map_err(to_py_err)
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "PublicSubkey(fingerprint='{}', key_id='{}')",
-            self.fingerprint(),
-            self.key_id()
-        )
-    }
-}
-
-/// A signed OpenPGP secret subkey together with its binding signatures.
-#[pyclass(module = "openpgp", from_py_object)]
-#[derive(Clone)]
-pub(crate) struct SecretSubkey {
-    pub(crate) inner: SignedSecretSubKey,
-}
-
-#[pymethods]
-impl SecretSubkey {
-    #[getter]
-    fn fingerprint(&self) -> String {
-        self.inner.key.public_key().fingerprint().to_string()
-    }
-
-    #[getter]
-    fn key_id(&self) -> String {
-        self.inner.key.public_key().legacy_key_id().to_string()
-    }
-
-    #[getter]
-    fn version(&self) -> u8 {
-        key_version_number(self.inner.key.version())
-    }
-
-    #[getter]
-    fn created_at(&self) -> u32 {
-        self.inner.key.created_at().as_secs()
-    }
-
-    #[getter]
-    fn public_key_algorithm(&self) -> String {
-        public_key_algorithm_name(self.inner.key.algorithm()).to_string()
-    }
-
-    #[getter]
-    fn public_params(&self) -> PublicParamsInfo {
-        public_params_info_from_params(self.inner.key.public_params())
-    }
-
-    #[getter]
-    fn packet_version(&self) -> PyPacketHeaderVersion {
-        PyPacketHeaderVersion {
-            inner: self.inner.key.packet_header_version(),
-        }
-    }
-
-    /// The binding and revocation signatures attached to this subkey packet.
-    #[getter]
-    fn signatures(&self) -> Vec<SignatureInfo> {
-        self.inner
-            .signatures
-            .iter()
-            .map(|signature| signature_info_from_signature(signature, false))
-            .collect()
-    }
-
-    /// Return the corresponding public subkey, dropping secret key material.
-    fn signed_public_key(&self) -> PublicSubkey {
-        PublicSubkey {
-            inner: self.inner.signed_public_key(),
-        }
-    }
-
-    fn to_bytes(&self) -> PyResult<Vec<u8>> {
-        self.inner.to_bytes().map_err(to_py_err)
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "SecretSubkey(fingerprint='{}', key_id='{}')",
             self.fingerprint(),
             self.key_id()
         )
@@ -957,10 +765,12 @@ pub(crate) fn public_recipient_from_python(
     if let Ok(public_key) = recipient.extract::<PyRef<'_, PublicKey>>() {
         return Ok(PublicRecipient::Certificate(public_key.inner.clone()));
     }
-    if let Ok(subkey) = recipient.extract::<PyRef<'_, PublicSubkey>>() {
+    if let Ok(subkey) = recipient.extract::<PyRef<'_, PySignedPublicSubKey>>() {
         return Ok(PublicRecipient::Subkey(subkey.inner.clone()));
     }
-    Err(to_py_err("recipient must be a PublicKey or PublicSubkey"))
+    Err(to_py_err(
+        "recipient must be a PublicKey or SignedPublicSubKey",
+    ))
 }
 
 pub(crate) fn public_recipients_from_python(
@@ -985,10 +795,12 @@ pub(crate) fn secret_signer_from_python(
     if let Ok(secret_key) = signer.extract::<PyRef<'_, SecretKey>>() {
         return Ok(SecretSigner::Certificate(secret_key.inner.clone()));
     }
-    if let Ok(subkey) = signer.extract::<PyRef<'_, SecretSubkey>>() {
+    if let Ok(subkey) = signer.extract::<PyRef<'_, PySignedSecretSubKey>>() {
         return Ok(SecretSigner::Subkey(subkey.inner.clone()));
     }
-    Err(to_py_err("signer must be a SecretKey or SecretSubkey"))
+    Err(to_py_err(
+        "signer must be a SecretKey or SignedSecretSubKey",
+    ))
 }
 
 pub(crate) fn signer_entries_from_python(

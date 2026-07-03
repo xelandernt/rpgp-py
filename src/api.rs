@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use crate::conversions::*;
 use crate::info::*;
 use crate::keys::*;
@@ -20,7 +22,7 @@ fn sign_message_with_signers(
         signer.apply_message_signature(&mut builder, password, hash_algorithm);
     }
     builder
-        .to_armored_string(&mut rand::thread_rng(), ArmorOptions::default())
+        .to_armored_string(rand::thread_rng(), ArmorOptions::default())
         .map_err(to_py_err)
 }
 

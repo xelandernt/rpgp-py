@@ -47,8 +47,8 @@ pub(crate) fn required_compression_algorithm_from_name(
 
 pub(crate) fn curve_from_name(name: &str) -> PyResult<ECCCurve> {
     match name.to_ascii_lowercase().as_str() {
-        "curve25519" => Ok(ECCCurve::Curve25519),
-        "ed25519" => Ok(ECCCurve::Ed25519),
+        "curve25519" => Ok(ECCCurve::Curve25519Legacy),
+        "ed25519" => Ok(ECCCurve::Ed25519Legacy),
         "p256" => Ok(ECCCurve::P256),
         "p384" => Ok(ECCCurve::P384),
         "p521" => Ok(ECCCurve::P521),
@@ -118,8 +118,8 @@ pub(crate) fn aead_algorithm_preferences_from_names(
 
 pub(crate) fn curve_name(curve: &ECCCurve) -> &'static str {
     match curve {
-        ECCCurve::Curve25519 => "curve25519",
-        ECCCurve::Ed25519 => "ed25519",
+        ECCCurve::Curve25519Legacy => "curve25519",
+        ECCCurve::Ed25519Legacy => "ed25519",
         ECCCurve::P256 => "p256",
         ECCCurve::P384 => "p384",
         ECCCurve::P521 => "p521",

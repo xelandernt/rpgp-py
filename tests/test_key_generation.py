@@ -12,7 +12,7 @@ from openpgp import (
     PublicKey,
     SecretKey,
     SecretKeyParamsBuilder,
-    SignatureInfo,
+    SignaturePacket,
     S2kParams,
     StringToKey,
     SubkeyParamsBuilder,
@@ -147,8 +147,8 @@ def test_generate_ed25519_x25519_key_roundtrips(version: KeyVersion) -> None:
     assert secret_key.secret_subkey_count == 1
     assert public_key.public_subkey_count == 1
     assert public_key.user_ids == ["Me-X <me-25519-rfc9580@mail.com>"]
-    assert secret_key.revocation_signature_infos() == []
-    assert public_key.revocation_signature_infos() == []
+    assert secret_key.details.revocation_signatures == []
+    assert public_key.details.revocation_signatures == []
 
     secret_key.verify_bindings()
     public_key.verify_bindings()
@@ -241,14 +241,14 @@ def test_generated_key_details_expose_version_algorithm_and_creation_time(
     assert secret_key.public_key_algorithm == "ed25519"
     assert public_key.public_key_algorithm == "ed25519"
 
-    secret_binding = secret_key.subkey_bindings()[0]
-    public_binding = public_key.subkey_bindings()[0]
-    assert secret_binding.version == version
-    assert public_binding.version == version
-    assert secret_binding.created_at == FIXED_SUBKEY_CREATED_AT
-    assert public_binding.created_at == FIXED_SUBKEY_CREATED_AT
-    assert secret_binding.public_key_algorithm == "x25519"
-    assert public_binding.public_key_algorithm == "x25519"
+    secret_binding = secret_key.secret_subkeys[0]
+    public_binding = public_key.public_subkeys[0]
+    assert secret_binding.key.version == version
+    assert public_binding.key.version == version
+    assert secret_binding.key.created_at == FIXED_SUBKEY_CREATED_AT
+    assert public_binding.key.created_at == FIXED_SUBKEY_CREATED_AT
+    assert secret_binding.key.public_key_algorithm == "x25519"
+    assert public_binding.key.public_key_algorithm == "x25519"
 
     reparsed_secret, _ = SecretKey.from_armor(secret_key.to_armored())
     reparsed_public, _ = PublicKey.from_armor(public_key.to_armored())
@@ -260,14 +260,14 @@ def test_generated_key_details_expose_version_algorithm_and_creation_time(
     assert reparsed_secret.public_key_algorithm == "ed25519"
     assert reparsed_public.public_key_algorithm == "ed25519"
 
-    reparsed_secret_binding = reparsed_secret.subkey_bindings()[0]
-    reparsed_public_binding = reparsed_public.subkey_bindings()[0]
-    assert reparsed_secret_binding.version == version
-    assert reparsed_public_binding.version == version
-    assert reparsed_secret_binding.created_at == FIXED_SUBKEY_CREATED_AT
-    assert reparsed_public_binding.created_at == FIXED_SUBKEY_CREATED_AT
-    assert reparsed_secret_binding.public_key_algorithm == "x25519"
-    assert reparsed_public_binding.public_key_algorithm == "x25519"
+    reparsed_secret_binding = reparsed_secret.secret_subkeys[0]
+    reparsed_public_binding = reparsed_public.public_subkeys[0]
+    assert reparsed_secret_binding.key.version == version
+    assert reparsed_public_binding.key.version == version
+    assert reparsed_secret_binding.key.created_at == FIXED_SUBKEY_CREATED_AT
+    assert reparsed_public_binding.key.created_at == FIXED_SUBKEY_CREATED_AT
+    assert reparsed_secret_binding.key.public_key_algorithm == "x25519"
+    assert reparsed_public_binding.key.public_key_algorithm == "x25519"
 
 
 @pytest.mark.parametrize("version", [4, 6])
@@ -308,8 +308,8 @@ def test_generated_ecdsa_and_ecdh_public_params_expose_curve_metadata(
         assert params.kdf_symmetric_algorithm is None
         assert params.kdf_type is None
 
-    for binding in (secret_key.subkey_bindings()[0], public_key.subkey_bindings()[0]):
-        params = binding.public_params
+    for binding in (secret_key.secret_subkeys[0], public_key.public_subkeys[0]):
+        params = binding.key.public_params
         assert params.kind == "ecdh"
         assert params.curve == "p256"
         assert params.is_supported is True
@@ -323,8 +323,8 @@ def test_generated_ecdsa_and_ecdh_public_params_expose_curve_metadata(
 
     assert reparsed_secret.public_params.curve == "p256"
     assert reparsed_public.public_params.curve == "p256"
-    assert reparsed_secret.subkey_bindings()[0].public_params.curve == "p256"
-    assert reparsed_public.subkey_bindings()[0].public_params.curve == "p256"
+    assert reparsed_secret.secret_subkeys[0].key.public_params.curve == "p256"
+    assert reparsed_public.public_subkeys[0].key.public_params.curve == "p256"
 
 
 def test_legacy_curve25519_public_params_expose_curve_metadata() -> None:
@@ -360,8 +360,8 @@ def test_legacy_curve25519_public_params_expose_curve_metadata() -> None:
         assert params.curve_bits == 256
         assert params.secret_key_length == 32
 
-    for binding in (secret_key.subkey_bindings()[0], public_key.subkey_bindings()[0]):
-        params = binding.public_params
+    for binding in (secret_key.secret_subkeys[0], public_key.public_subkeys[0]):
+        params = binding.key.public_params
         assert params.kind == "ecdh"
         assert params.curve == "curve25519"
         assert params.is_supported is True
@@ -375,8 +375,8 @@ def test_legacy_curve25519_public_params_expose_curve_metadata() -> None:
 
     assert reparsed_secret.public_params.curve == "ed25519"
     assert reparsed_public.public_params.curve == "ed25519"
-    assert reparsed_secret.subkey_bindings()[0].public_params.curve == "curve25519"
-    assert reparsed_public.subkey_bindings()[0].public_params.curve == "curve25519"
+    assert reparsed_secret.secret_subkeys[0].key.public_params.curve == "curve25519"
+    assert reparsed_public.public_subkeys[0].key.public_params.curve == "curve25519"
 
 
 def test_dsa_public_params_expose_prime_size_for_generated_and_parsed_keys() -> None:
@@ -438,7 +438,7 @@ def test_rsa_public_params_expose_modulus_size_for_generated_and_parsed_keys() -
         read_fixture_text("rsa-rsa-sample-1.asc")
     )
     assert fixture_public_key.public_params.rsa_bits == 2048
-    assert fixture_public_key.subkey_bindings()[0].public_params.rsa_bits == 2048
+    assert fixture_public_key.public_subkeys[0].key.public_params.rsa_bits == 2048
 
 
 def test_legacy_curve25519_key_details_expose_algorithm_categories() -> None:
@@ -471,12 +471,12 @@ def test_legacy_curve25519_key_details_expose_algorithm_categories() -> None:
     assert secret_key.created_at == FIXED_PRIMARY_CREATED_AT
     assert public_key.created_at == FIXED_PRIMARY_CREATED_AT
 
-    secret_binding = secret_key.subkey_bindings()[0]
-    public_binding = public_key.subkey_bindings()[0]
-    assert secret_binding.public_key_algorithm == "ecdh"
-    assert public_binding.public_key_algorithm == "ecdh"
-    assert secret_binding.created_at == FIXED_SUBKEY_CREATED_AT
-    assert public_binding.created_at == FIXED_SUBKEY_CREATED_AT
+    secret_binding = secret_key.secret_subkeys[0]
+    public_binding = public_key.public_subkeys[0]
+    assert secret_binding.key.public_key_algorithm == "ecdh"
+    assert public_binding.key.public_key_algorithm == "ecdh"
+    assert secret_binding.key.created_at == FIXED_SUBKEY_CREATED_AT
+    assert public_binding.key.created_at == FIXED_SUBKEY_CREATED_AT
 
 
 @pytest.mark.parametrize("version", [4, 6])
@@ -725,35 +725,33 @@ def test_signing_capable_subkey_bindings_expose_embedded_primary_key_binding() -
     )
     public_key = secret_key.to_public_key()
 
-    secret_binding = secret_key.subkey_bindings()[0]
-    public_binding = public_key.subkey_bindings()[0]
+    secret_binding = secret_key.secret_subkeys[0]
+    public_binding = public_key.public_subkeys[0]
 
-    assert secret_binding.fingerprint == public_binding.fingerprint
-    assert secret_binding.key_id == public_binding.key_id
+    assert secret_binding.key.fingerprint == public_binding.key.fingerprint
+    assert secret_binding.key.key_id == public_binding.key.key_id
 
     secret_signature = secret_binding.signatures[0]
     public_signature = public_binding.signatures[0]
-    assert secret_signature.signature_type == "subkey-binding"
-    assert public_signature.signature_type == "subkey-binding"
-    assert secret_signature.key_flags.sign is True
-    assert public_signature.key_flags.sign is True
+    assert secret_signature.typ() == "subkey-binding"
+    assert public_signature.typ() == "subkey-binding"
+    assert secret_signature.key_flags().sign is True
+    assert public_signature.key_flags().sign is True
 
-    secret_embedded = secret_signature.embedded_signature
-    public_embedded = public_signature.embedded_signature
+    secret_embedded = secret_signature.embedded_signature()
+    public_embedded = public_signature.embedded_signature()
     assert secret_embedded is not None
     assert public_embedded is not None
-    assert secret_embedded.signature_type == "primary-key-binding"
-    assert public_embedded.signature_type == "primary-key-binding"
+    assert secret_embedded.typ() == "primary-key-binding"
+    assert public_embedded.typ() == "primary-key-binding"
 
     reparsed_secret, _ = SecretKey.from_armor(secret_key.to_armored())
     reparsed_public, _ = PublicKey.from_armor(public_key.to_armored())
     assert (
-        reparsed_secret.subkey_bindings()[0].signatures[0].embedded_signature
-        is not None
+        reparsed_secret.secret_subkeys[0].signatures[0].embedded_signature() is not None
     )
     assert (
-        reparsed_public.subkey_bindings()[0].signatures[0].embedded_signature
-        is not None
+        reparsed_public.public_subkeys[0].signatures[0].embedded_signature() is not None
     )
 
 
@@ -775,19 +773,19 @@ def test_encryption_subkey_bindings_expose_key_flags_without_embedded_signature(
     )
     public_key = secret_key.to_public_key()
 
-    secret_signature = secret_key.subkey_bindings()[0].signatures[0]
-    public_signature = public_key.subkey_bindings()[0].signatures[0]
+    secret_signature = secret_key.secret_subkeys[0].signatures[0]
+    public_signature = public_key.public_subkeys[0].signatures[0]
 
-    assert secret_signature.signature_type == "subkey-binding"
-    assert public_signature.signature_type == "subkey-binding"
-    assert secret_signature.key_flags.sign is False
-    assert public_signature.key_flags.sign is False
-    assert secret_signature.key_flags.encrypt_communications is True
-    assert public_signature.key_flags.encrypt_communications is True
-    assert secret_signature.key_flags.encrypt_storage is True
-    assert public_signature.key_flags.encrypt_storage is True
-    assert secret_signature.embedded_signature is None
-    assert public_signature.embedded_signature is None
+    assert secret_signature.typ() == "subkey-binding"
+    assert public_signature.typ() == "subkey-binding"
+    assert secret_signature.key_flags().sign is False
+    assert public_signature.key_flags().sign is False
+    assert secret_signature.key_flags().encrypt_communications is True
+    assert public_signature.key_flags().encrypt_communications is True
+    assert secret_signature.key_flags().encrypt_storage is True
+    assert public_signature.key_flags().encrypt_storage is True
+    assert secret_signature.embedded_signature() is None
+    assert public_signature.embedded_signature() is None
 
 
 def build_certificate_metadata_key(
@@ -823,37 +821,36 @@ def build_certificate_metadata_key(
 
 
 def assert_certificate_preferences_are_exposed_on_signature(
-    info: SignatureInfo,
+    info: SignaturePacket,
     *,
     has_features: bool,
     seipd_v1: bool,
     seipd_v2: bool,
 ) -> None:
     """Assert the self-signature metadata surfaced from upstream certificate builders."""
-    assert info.preferred_symmetric_algorithms == ["aes256"]
-    assert info.preferred_hash_algorithms == ["sha512"]
-    assert info.preferred_compression_algorithms == ["zlib"]
-    assert info.preferred_aead_algorithms == []
-    assert info.preferred_key_server is None
-    assert info.notations == []
-    assert info.policy_uri is None
-    assert info.revocation_key is None
-    assert info.revocation_reason_code is None
-    assert info.revocation_reason is None
-    assert info.is_revocable is True
-    assert info.exportable_certification is True
-    assert info.key_flags.certify is True
-    assert info.key_flags.sign is True
-    assert info.key_flags.encrypt_communications is False
-    assert info.key_flags.encrypt_storage is False
-    assert info.key_flags.authenticate is False
+    assert info.preferred_symmetric_algs() == ["aes256"]
+    assert info.preferred_hash_algs() == ["sha512"]
+    assert info.preferred_compression_algs() == ["zlib"]
+    assert info.preferred_aead_algs() == []
+    assert info.preferred_key_server() is None
+    assert info.notations() == []
+    assert info.policy_uri() is None
+    assert info.revocation_key() is None
+    assert info.is_revocable() is True
+    assert info.exportable_certification() is True
+    assert info.key_flags().certify is True
+    assert info.key_flags().sign is True
+    assert info.key_flags().encrypt_communications is False
+    assert info.key_flags().encrypt_storage is False
+    assert info.key_flags().authenticate is False
 
     if has_features:
-        assert info.features is not None
-        assert info.features.seipd_v1 is seipd_v1
-        assert info.features.seipd_v2 is seipd_v2
+        features = info.features()
+        assert features is not None
+        assert features.seipd_v1 is seipd_v1
+        assert features.seipd_v2 is seipd_v2
     else:
-        assert info.features is None
+        assert info.features() is None
 
 
 def test_v4_certificate_metadata_is_exposed_on_primary_user_binding_signature() -> None:
@@ -861,11 +858,11 @@ def test_v4_certificate_metadata_is_exposed_on_primary_user_binding_signature() 
     secret_key = build_certificate_metadata_key(4, primary_user_id="alice")
     public_key = secret_key.to_public_key()
 
-    assert secret_key.direct_signature_infos() == []
-    assert public_key.direct_signature_infos() == []
+    assert secret_key.details.direct_signatures == []
+    assert public_key.details.direct_signatures == []
 
-    secret_bindings = secret_key.user_bindings()
-    public_bindings = public_key.user_bindings()
+    secret_bindings = secret_key.details.users
+    public_bindings = public_key.details.users
     assert len(secret_bindings) == 1
     assert len(public_bindings) == 1
 
@@ -880,8 +877,8 @@ def test_v4_certificate_metadata_is_exposed_on_primary_user_binding_signature() 
 
     secret_info = secret_binding.signatures[0]
     public_info = public_binding.signatures[0]
-    assert secret_info.signature_type == "cert-positive"
-    assert public_info.signature_type == "cert-positive"
+    assert secret_info.typ() == "cert-positive"
+    assert public_info.typ() == "cert-positive"
     assert_certificate_preferences_are_exposed_on_signature(
         secret_info,
         has_features=True,
@@ -905,15 +902,15 @@ def test_v6_certificate_metadata_moves_to_direct_key_signature() -> None:
     )
     public_key = secret_key.to_public_key()
 
-    secret_direct_signatures = secret_key.direct_signature_infos()
-    public_direct_signatures = public_key.direct_signature_infos()
+    secret_direct_signatures = secret_key.details.direct_signatures
+    public_direct_signatures = public_key.details.direct_signatures
     assert len(secret_direct_signatures) == 1
     assert len(public_direct_signatures) == 1
 
     secret_direct = secret_direct_signatures[0]
     public_direct = public_direct_signatures[0]
-    assert secret_direct.signature_type == "direct-key"
-    assert public_direct.signature_type == "direct-key"
+    assert secret_direct.typ() == "direct-key"
+    assert public_direct.typ() == "direct-key"
     assert_certificate_preferences_are_exposed_on_signature(
         secret_direct,
         has_features=True,
@@ -927,28 +924,28 @@ def test_v6_certificate_metadata_moves_to_direct_key_signature() -> None:
         seipd_v2=True,
     )
 
-    secret_binding = secret_key.user_bindings()[0]
-    public_binding = public_key.user_bindings()[0]
+    secret_binding = secret_key.details.users[0]
+    public_binding = public_key.details.users[0]
     secret_binding_info = secret_binding.signatures[0]
     public_binding_info = public_binding.signatures[0]
     assert secret_binding.user_id == "alice"
     assert secret_binding.is_primary is True
     assert public_binding.user_id == "alice"
     assert public_binding.is_primary is True
-    assert secret_binding_info.preferred_symmetric_algorithms == []
-    assert secret_binding_info.preferred_hash_algorithms == []
-    assert secret_binding_info.preferred_compression_algorithms == []
-    assert secret_binding_info.preferred_aead_algorithms == []
-    assert public_binding_info.preferred_symmetric_algorithms == []
-    assert public_binding_info.preferred_hash_algorithms == []
-    assert public_binding_info.preferred_compression_algorithms == []
-    assert public_binding_info.preferred_aead_algorithms == []
-    assert secret_binding_info.key_flags.certify is False
-    assert secret_binding_info.key_flags.sign is False
-    assert public_binding_info.key_flags.certify is False
-    assert public_binding_info.key_flags.sign is False
-    assert secret_binding_info.features is None
-    assert public_binding_info.features is None
+    assert secret_binding_info.preferred_symmetric_algs() == []
+    assert secret_binding_info.preferred_hash_algs() == []
+    assert secret_binding_info.preferred_compression_algs() == []
+    assert secret_binding_info.preferred_aead_algs() == []
+    assert public_binding_info.preferred_symmetric_algs() == []
+    assert public_binding_info.preferred_hash_algs() == []
+    assert public_binding_info.preferred_compression_algs() == []
+    assert public_binding_info.preferred_aead_algs() == []
+    assert secret_binding_info.key_flags().certify is False
+    assert secret_binding_info.key_flags().sign is False
+    assert public_binding_info.key_flags().certify is False
+    assert public_binding_info.key_flags().sign is False
+    assert secret_binding_info.features() is None
+    assert public_binding_info.features() is None
 
 
 def test_v6_id_less_certificate_still_exposes_direct_key_signature_metadata() -> None:
@@ -961,11 +958,11 @@ def test_v6_id_less_certificate_still_exposes_direct_key_signature_metadata() ->
     )
     public_key = secret_key.to_public_key()
 
-    assert secret_key.user_bindings() == []
-    assert public_key.user_bindings() == []
+    assert secret_key.details.users == []
+    assert public_key.details.users == []
 
-    secret_direct = secret_key.direct_signature_infos()
-    public_direct = public_key.direct_signature_infos()
+    secret_direct = secret_key.details.direct_signatures
+    public_direct = public_key.details.direct_signatures
     assert len(secret_direct) == 1
     assert len(public_direct) == 1
     assert_certificate_preferences_are_exposed_on_signature(
@@ -989,8 +986,8 @@ def test_user_attribute_image_packets_roundtrip_from_builder() -> None:
     secret_key = build_modern_signing_key(4).user_attribute(portrait).build().generate()
     public_key = secret_key.to_public_key()
 
-    secret_attributes = secret_key.user_attribute_bindings()
-    public_attributes = public_key.user_attribute_bindings()
+    secret_attributes = secret_key.details.user_attributes
+    public_attributes = public_key.details.user_attributes
     assert len(secret_attributes) == 1
     assert len(public_attributes) == 1
 
@@ -1006,17 +1003,17 @@ def test_user_attribute_image_packets_roundtrip_from_builder() -> None:
     assert public_attribute.user_attribute.data == JPEG_USER_ATTRIBUTE_DATA
     assert len(secret_attribute.signatures) == 1
     assert len(public_attribute.signatures) == 1
-    assert secret_attribute.signatures[0].signature_type == "cert-positive"
-    assert public_attribute.signatures[0].signature_type == "cert-positive"
+    assert secret_attribute.signatures[0].typ() == "cert-positive"
+    assert public_attribute.signatures[0].typ() == "cert-positive"
 
     reparsed_secret, _ = SecretKey.from_armor(secret_key.to_armored())
     reparsed_public, _ = PublicKey.from_armor(public_key.to_armored())
     assert (
-        reparsed_secret.user_attribute_bindings()[0].user_attribute.data
+        reparsed_secret.details.user_attributes[0].user_attribute.data
         == JPEG_USER_ATTRIBUTE_DATA
     )
     assert (
-        reparsed_public.user_attribute_bindings()[0].user_attribute.data
+        reparsed_public.details.user_attributes[0].user_attribute.data
         == JPEG_USER_ATTRIBUTE_DATA
     )
 
@@ -1034,7 +1031,7 @@ def test_user_attribute_sequence_builder_preserves_order(version: KeyVersion) ->
         .generate()
     )
 
-    attributes = secret_key.user_attribute_bindings()
+    attributes = secret_key.details.user_attributes
     assert [binding.user_attribute.data for binding in attributes] == [
         bytes.fromhex("ffd8ffdb00"),
         bytes.fromhex("ffd8ffee010203"),
@@ -1044,7 +1041,7 @@ def test_user_attribute_sequence_builder_preserves_order(version: KeyVersion) ->
         assert binding.user_attribute.image_format == "jpeg"
         assert binding.user_attribute.image_header_version == 1
         assert len(binding.signatures) == 1
-        assert binding.signatures[0].signature_type == "cert-positive"
+        assert binding.signatures[0].typ() == "cert-positive"
 
 
 def test_s2k_params_reject_argon2_with_cfb_usage() -> None:
@@ -1373,21 +1370,21 @@ def test_packet_version_is_exposed_on_keys_and_subkey_bindings(
     assert public_key.packet_version == primary_packet_version
     assert secret_key.packet_version.name == expected_primary_version
     assert public_key.packet_version.name == expected_primary_version
-    assert secret_key.subkey_bindings()[0].packet_version == subkey_packet_version
-    assert public_key.subkey_bindings()[0].packet_version == subkey_packet_version
+    assert secret_key.secret_subkeys[0].key.packet_version == subkey_packet_version
+    assert public_key.public_subkeys[0].key.packet_version == subkey_packet_version
     assert (
-        secret_key.subkey_bindings()[0].packet_version.name == expected_subkey_version
+        secret_key.secret_subkeys[0].key.packet_version.name == expected_subkey_version
     )
     assert (
-        public_key.subkey_bindings()[0].packet_version.name == expected_subkey_version
+        public_key.public_subkeys[0].key.packet_version.name == expected_subkey_version
     )
 
     reparsed_secret = SecretKey.from_bytes(secret_key.to_bytes())
     reparsed_public = PublicKey.from_bytes(public_key.to_bytes())
     assert reparsed_secret.packet_version == primary_packet_version
     assert reparsed_public.packet_version == primary_packet_version
-    assert reparsed_secret.subkey_bindings()[0].packet_version == subkey_packet_version
-    assert reparsed_public.subkey_bindings()[0].packet_version == subkey_packet_version
+    assert reparsed_secret.secret_subkeys[0].key.packet_version == subkey_packet_version
+    assert reparsed_public.public_subkeys[0].key.packet_version == subkey_packet_version
 
     assert [
         header.version

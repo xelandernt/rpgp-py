@@ -5,6 +5,7 @@ from typing import TypedDict, cast
 
 import pytest
 
+from openpgp.inspect import inspect_message
 from openpgp import (
     ArmorOptions,
     CleartextSignedMessage,
@@ -16,7 +17,7 @@ from openpgp import (
     PublicKey,
     SecretKey,
     SecretKeyParamsBuilder,
-    SignatureInfo,
+    SignaturePacket,
     StringToKey,
     SubkeyParamsBuilder,
     encrypt_message_to_recipient_bytes,
@@ -27,7 +28,6 @@ from openpgp import (
     encrypt_message_with_password,
     encrypt_session_key_to_recipient,
     encrypt_session_key_with_password,
-    inspect_message,
     sign_cleartext_message,
     sign_cleartext_message_many,
     sign_message,
@@ -41,7 +41,7 @@ BUNDLED_KEY_FINGERPRINTS = [
     "d1a66e1a23b182c9980f788cfbfcc82a015e7330",
     "cb186c4f0609a697e4d52dfa6c722b0c1f1e27c18a56708f6525ec27bad9acc9",
 ]
-BUNDLED_SIGNATURE_HASH_ALGORITHMS = ["SHA256", "SHA512"]
+BUNDLED_SIGNATURE_HASH_ALGORITHMS = ["sha256", "sha512"]
 
 
 def read_fixture_text(name: str) -> str:
@@ -131,19 +131,19 @@ def generate_subkey_signing_and_encryption_key(user_id: str) -> SecretKey:
     )
 
 
-def signature_index_for_key_id(infos: list[SignatureInfo], key_id: str) -> int:
+def signature_index_for_key_id(sigs: list[SignaturePacket], key_id: str) -> int:
     return next(
-        index for index, info in enumerate(infos) if key_id in info.issuer_key_ids
+        index for index, sig in enumerate(sigs) if key_id in sig.issuer_key_id()
     )
 
 
 def signature_index_for_fingerprint(
-    infos: list[SignatureInfo], fingerprint: str
+    sigs: list[SignaturePacket], fingerprint: str
 ) -> int:
     return next(
         index
-        for index, info in enumerate(infos)
-        if fingerprint in info.issuer_fingerprints
+        for index, sig in enumerate(sigs)
+        if fingerprint in sig.issuer_fingerprint()
     )
 
 
@@ -184,7 +184,7 @@ def test_parse_public_key_from_armor() -> None:
     assert key.key_id
     assert key.public_subkey_count == 1
     assert key.user_ids == []
-    assert key.revocation_signature_infos() == []
+    assert key.details.revocation_signatures == []
     assert PublicKey.from_bytes(key.to_bytes()).fingerprint == key.fingerprint
     key.verify_bindings()
 
@@ -198,8 +198,8 @@ def test_parse_secret_key_and_convert_to_public() -> None:
     assert public_key.public_subkey_count == 1
     assert public_key.fingerprint == secret_key.fingerprint
     assert secret_key.user_ids == public_key.user_ids
-    assert secret_key.revocation_signature_infos() == []
-    assert public_key.revocation_signature_infos() == []
+    assert secret_key.details.revocation_signatures == []
+    assert public_key.details.revocation_signatures == []
     secret_key.verify_bindings()
 
 
@@ -304,8 +304,8 @@ def test_sign_and_verify_message() -> None:
     assert message.literal_filename() == b""
     assert message.payload_bytes() == b"Hello world"
     assert message.payload_text() == "Hello world"
-    assert message.signature_infos()[0].notations == []
-    assert message.signature_infos()[0].revocation_key is None
+    assert message.signatures()[0].notations() == []
+    assert message.signatures()[0].revocation_key() is None
     message.verify(public_key)
 
 
@@ -315,12 +315,12 @@ def test_sign_message_supports_custom_hash_algorithm() -> None:
 
     armored = sign_message(b"Hello world", secret_key, hash_algorithm="sha512")
     message, _ = Message.from_armor(armored)
-    info = message.signature_infos()[0]
+    info = message.signatures()[0]
 
-    assert info.signature_type == "binary"
-    assert info.hash_algorithm == "SHA512"
-    assert info.notations == []
-    assert info.revocation_key is None
+    assert info.typ() == "binary"
+    assert info.hash_alg() == "sha512"
+    assert info.notations() == []
+    assert info.revocation_key() is None
     message.verify(public_key)
 
 
@@ -333,9 +333,9 @@ def test_sign_message_accepts_secret_subkey() -> None:
 
     armored = sign_message(b"Hello from a subkey", signing_subkey)
     message, _ = Message.from_armor(armored)
-    info = message.signature_infos()[0]
+    info = message.signatures()[0]
 
-    assert info.issuer_fingerprints == [signing_subkey.fingerprint]
+    assert info.issuer_fingerprint() == [signing_subkey.key.fingerprint]
     message.verify(public_key)
 
 
@@ -353,22 +353,22 @@ def test_sign_message_many_supports_multiple_signers() -> None:
         hash_algorithm="sha384",
     )
     message, _ = Message.from_armor(armored)
-    infos = message.signature_infos()
+    sigs = message.signatures()
 
     assert message.signature_count() == 2
-    assert len(infos) == 2
-    assert {info.signature_type for info in infos} == {"binary"}
-    assert {info.hash_algorithm for info in infos} == {"SHA384"}
+    assert len(sigs) == 2
+    assert {sig.typ() for sig in sigs} == {"binary"}
+    assert {sig.hash_alg() for sig in sigs} == {"sha384"}
 
-    first_index = signature_index_for_fingerprint(infos, first_public_key.fingerprint)
-    second_index = signature_index_for_fingerprint(infos, second_public_key.fingerprint)
+    first_index = signature_index_for_fingerprint(sigs, first_public_key.fingerprint)
+    second_index = signature_index_for_fingerprint(sigs, second_public_key.fingerprint)
 
     assert message.verify_signature(
         first_public_key, first_index
-    ).issuer_fingerprints == [first_public_key.fingerprint]
+    ).issuer_fingerprint() == [first_public_key.fingerprint]
     assert message.verify_signature(
         second_public_key, second_index
-    ).issuer_fingerprints == [second_public_key.fingerprint]
+    ).issuer_fingerprint() == [second_public_key.fingerprint]
 
 
 def test_sign_and_verify_detached_signature() -> None:
@@ -377,17 +377,16 @@ def test_sign_and_verify_detached_signature() -> None:
     payload = b"detached payload"
 
     signature = DetachedSignature.sign_binary(payload, secret_key)
-    info = signature.signature_info()
+    info = signature.signature
 
-    assert info.signature_type == "binary"
-    assert info.hash_algorithm == "SHA256"
-    assert info.is_one_pass is False
-    assert info.notations == []
-    assert info.revocation_key is None
+    assert info.typ() == "binary"
+    assert info.hash_alg() == "sha256"
+    assert info.notations() == []
+    assert info.revocation_key() is None
     signature.verify(public_key, payload)
     assert (
-        signature.verify_signature(public_key, payload).signed_hash_value
-        == info.signed_hash_value
+        signature.verify_signature(public_key, payload).signed_hash_value()
+        == info.signed_hash_value()
     )
 
     reparsed = DetachedSignature.from_bytes(signature.to_bytes())
@@ -407,9 +406,7 @@ def test_detached_signature_sign_binary_accepts_secret_subkey() -> None:
 
     signature = DetachedSignature.sign_binary(payload, signing_subkey)
 
-    assert signature.signature_info().issuer_fingerprints == [
-        signing_subkey.fingerprint
-    ]
+    assert signature.signature.issuer_fingerprint() == [signing_subkey.key.fingerprint]
     signature.verify(public_key, payload)
     armored_signature, headers = DetachedSignature.from_armor(signature.to_armored())
     assert headers == {}
@@ -427,40 +424,35 @@ def test_detached_signature_deserializers_support_many_and_file_inputs() -> None
         (MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.asc").read_text()
     )
     assert headers == {}
+    assert [signature.signature.hash_alg() for signature in armored_signatures] == (
+        BUNDLED_SIGNATURE_HASH_ALGORITHMS
+    )
     assert [
-        signature.signature_info().hash_algorithm for signature in armored_signatures
-    ] == BUNDLED_SIGNATURE_HASH_ALGORITHMS
-    assert [
-        signature.signature_info().issuer_fingerprints[0]
-        for signature in armored_signatures
-    ] == BUNDLED_KEY_FINGERPRINTS
+        signature.signature.issuer_fingerprint()[0] for signature in armored_signatures
+    ] == (BUNDLED_KEY_FINGERPRINTS)
     for signature, public_key in zip(armored_signatures, public_keys):
         signature.verify(public_key, payload)
 
     binary_signatures = DetachedSignature.from_bytes_many(
         (MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.pgp").read_bytes()
     )
-    assert [
-        signature.signature_info().hash_algorithm for signature in binary_signatures
-    ] == BUNDLED_SIGNATURE_HASH_ALGORITHMS
+    assert [signature.signature.hash_alg() for signature in binary_signatures] == (
+        BUNDLED_SIGNATURE_HASH_ALGORITHMS
+    )
     for signature, public_key in zip(binary_signatures, public_keys):
         signature.verify(public_key, payload)
 
     assert (
         DetachedSignature.from_file(
             MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.pgp"
-        )
-        .signature_info()
-        .hash_algorithm
-        == "SHA256"
+        ).signature.hash_alg()
+        == "sha256"
     )
     assert (
         DetachedSignature.from_armor_file(
             MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.asc"
-        )[0]
-        .signature_info()
-        .hash_algorithm
-        == "SHA256"
+        )[0].signature.hash_alg()
+        == "sha256"
     )
 
     for signature, public_key in zip(
@@ -491,7 +483,7 @@ def test_detached_signature_supports_custom_hash_algorithm_for_binary_signatures
         hash_algorithm="sha512",
     )
 
-    assert signature.signature_info().hash_algorithm == "SHA512"
+    assert signature.signature.hash_alg() == "sha512"
     signature.verify(public_key, b"detached payload")
 
 
@@ -501,12 +493,12 @@ def test_detached_text_signature_uses_text_verification_helpers() -> None:
     text = "hello\nworld\n"
 
     signature = DetachedSignature.sign_text(text, secret_key, hash_algorithm="sha384")
-    info = signature.signature_info()
+    info = signature.signature
 
-    assert info.signature_type == "text"
-    assert info.hash_algorithm == "SHA384"
+    assert info.typ() == "text"
+    assert info.hash_alg() == "sha384"
     signature.verify_text(public_key, "hello\r\nworld\r\n")
-    assert signature.verify_text_signature(public_key, text).signature_type == "text"
+    assert signature.verify_text_signature(public_key, text).typ() == "text"
 
 
 def test_detached_signature_verifies_when_made_by_signing_subkey() -> None:
@@ -519,9 +511,9 @@ def test_detached_signature_verifies_when_made_by_signing_subkey() -> None:
     signature.verify(public_key, payload)
     info = signature.verify_signature(public_key, payload)
 
-    assert info.signature_type == "binary"
-    assert info.issuer_fingerprints
-    assert public_key.fingerprint not in info.issuer_fingerprints
+    assert info.typ() == "binary"
+    assert info.issuer_fingerprint()
+    assert public_key.fingerprint not in info.issuer_fingerprint()
 
 
 def test_detached_signature_verifies_streamed_file(tmp_path: Path) -> None:
@@ -537,8 +529,8 @@ def test_detached_signature_verifies_streamed_file(tmp_path: Path) -> None:
     signature.verify_file(public_key, str(artifact))
     info = signature.verify_file_signature(public_key, artifact)
 
-    assert info.signature_type == "binary"
-    assert info.hash_algorithm == "SHA256"
+    assert info.typ() == "binary"
+    assert info.hash_alg() == "sha256"
 
 
 def test_detached_signature_verify_file_works_with_signing_subkey() -> None:
@@ -610,7 +602,7 @@ def test_encrypt_and_decrypt_message_with_password_seipdv1() -> None:
     assert decrypted.signature_count() == 0
     assert decrypted.one_pass_signature_count() == 0
     assert decrypted.regular_signature_count() == 0
-    assert decrypted.signature_infos() == []
+    assert decrypted.signatures() == []
     assert decrypted.payload_text() == "secret payload"
 
 
@@ -645,7 +637,7 @@ def test_encrypt_and_decrypt_message_to_recipient() -> None:
     assert headers == {}
     assert message.kind == "encrypted"
     assert decrypted.literal_filename() == b""
-    assert decrypted.signature_infos() == []
+    assert decrypted.signatures() == []
     assert decrypted.payload_bytes() == b"recipient payload"
 
     with pytest.raises(ValueError, match="message was not signed"):
@@ -667,7 +659,7 @@ def test_encrypt_message_to_recipient_accepts_public_subkey() -> None:
 
     assert (
         message.public_key_encrypted_session_key_packets()[0].recipient_fingerprint
-        == encryption_subkey.fingerprint
+        == encryption_subkey.key.fingerprint
     )
     assert message.decrypt(secret_key).payload_bytes() == b"recipient subkey payload"
 
@@ -695,7 +687,7 @@ def test_message_binary_round_trip_and_packet_access_for_recipient_message() -> 
     assert pkesks[0].public_key_algorithm is not None
     assert pkesks[0].recipient_key_id is None
     assert (
-        pkesks[0].recipient_fingerprint == public_key.subkey_bindings()[0].fingerprint
+        pkesks[0].recipient_fingerprint == public_key.public_subkeys[0].key.fingerprint
     )
     assert pkesks[0].recipient_is_anonymous is False
     assert pkesks[0].values_bytes() is not None
@@ -770,7 +762,7 @@ def test_encrypt_to_recipient_with_custom_session_key_and_export_raw_pkesk() -> 
     )
     assert message.decrypt(secret_key).payload_bytes() == b"custom session key payload"
     assert packet.version == 6
-    assert packet.recipient_fingerprint == public_key.subkey_bindings()[0].fingerprint
+    assert packet.recipient_fingerprint == public_key.public_subkeys[0].key.fingerprint
     assert packet.recipient_key_id is None
     assert packet.recipient_is_anonymous is False
     assert packet.public_key_algorithm is not None
@@ -839,11 +831,11 @@ def test_message_builder_from_reader_data_mode_and_text_signature() -> None:
         .to_vec()
     )
     message = Message.from_bytes(message_bytes)
-    info = message.signature_infos()[0]
+    info = message.signatures()[0]
 
     assert message.literal_mode() == "utf8"
     assert message.payload_text() == "hello\r\nworld\r\n"
-    assert info.signature_type == "text"
+    assert info.typ() == "text"
     message.verify(public_key)
 
 
@@ -908,8 +900,8 @@ def test_message_builder_can_sign_and_encrypt_to_subkeys() -> None:
     decrypted = message.decrypt(secret_key)
 
     assert decrypted.payload_bytes() == b"subkey builder payload"
-    assert decrypted.signature_infos()[0].issuer_fingerprints == [
-        signing_subkey.fingerprint
+    assert decrypted.signatures()[0].issuer_fingerprint() == [
+        signing_subkey.key.fingerprint
     ]
     decrypted.verify(public_key)
 
@@ -991,19 +983,17 @@ def test_decrypted_signed_openpgp_interop_message_supports_signature_verificatio
     assert decrypted.one_pass_signature_count() == 1
     assert decrypted.regular_signature_count() == 0
 
-    infos = decrypted.signature_infos()
+    sigs = decrypted.signatures()
 
-    assert len(infos) == 1
-    assert infos[0].signature_type == "binary"
-    assert infos[0].hash_algorithm is not None
-    assert infos[0].is_one_pass is True
+    assert len(sigs) == 1
+    assert sigs[0].typ() == "binary"
+    assert sigs[0].hash_alg() is not None
 
     verified = decrypted.verify_signature(public_key)
 
-    assert verified.signature_type == infos[0].signature_type
-    assert verified.hash_algorithm == infos[0].hash_algorithm
-    assert verified.signed_hash_value == infos[0].signed_hash_value
-    assert verified.is_one_pass is True
+    assert verified.typ() == sigs[0].typ()
+    assert verified.hash_alg() == sigs[0].hash_alg()
+    assert verified.signed_hash_value() == sigs[0].signed_hash_value()
 
     decrypted.verify(public_key)
 
@@ -1037,7 +1027,7 @@ def test_sign_cleartext_message_supports_custom_hash_algorithm() -> None:
     armored = sign_cleartext_message("hello\n", secret_key, hash_algorithm="sha512")
     message, _ = CleartextSignedMessage.from_armor(armored)
 
-    assert message.signature_infos()[0].hash_algorithm == "SHA512"
+    assert message.signatures()[0].hash_alg() == "sha512"
     message.verify(public_key)
 
 
@@ -1048,10 +1038,10 @@ def test_cleartext_signed_message_classmethod_supports_custom_hash_algorithm() -
     message = CleartextSignedMessage.sign(
         "hello\n", secret_key, hash_algorithm="sha512"
     )
-    info = message.signature_infos()[0]
+    info = message.signatures()[0]
 
-    assert info.signature_type == "text"
-    assert info.hash_algorithm == "SHA512"
+    assert info.typ() == "text"
+    assert info.hash_alg() == "sha512"
     reparsed, _ = CleartextSignedMessage.from_armor(message.to_armored())
     reparsed.verify(public_key)
 
@@ -1072,21 +1062,21 @@ def test_sign_cleartext_message_many_supports_multiple_signers() -> None:
         hash_algorithm="sha384",
     )
     message, _ = CleartextSignedMessage.from_armor(armored)
-    infos = message.signature_infos()
+    sigs = message.signatures()
 
     assert message.signature_count() == 2
-    assert {info.signature_type for info in infos} == {"text"}
-    assert {info.hash_algorithm for info in infos} == {"SHA384"}
+    assert {sig.typ() for sig in sigs} == {"text"}
+    assert {sig.hash_alg() for sig in sigs} == {"sha384"}
 
-    first_index = signature_index_for_fingerprint(infos, first_public_key.fingerprint)
-    second_index = signature_index_for_fingerprint(infos, second_public_key.fingerprint)
+    first_index = signature_index_for_fingerprint(sigs, first_public_key.fingerprint)
+    second_index = signature_index_for_fingerprint(sigs, second_public_key.fingerprint)
 
     assert message.verify_signature(
         first_public_key, first_index
-    ).issuer_fingerprints == [first_public_key.fingerprint]
+    ).issuer_fingerprint() == [first_public_key.fingerprint]
     assert message.verify_signature(
         second_public_key, second_index
-    ).issuer_fingerprints == [second_public_key.fingerprint]
+    ).issuer_fingerprint() == [second_public_key.fingerprint]
 
 
 def test_encrypt_session_key_to_recipient_supports_anonymous_recipient() -> None:
@@ -1204,24 +1194,23 @@ def test_signed_message_signature_infos_and_indexed_verification() -> None:
     assert message.one_pass_signature_count() == 2
     assert message.regular_signature_count() == 0
 
-    infos = message.signature_infos()
+    sigs = message.signatures()
 
-    assert len(infos) == 2
-    assert {info.signature_type for info in infos} == {"binary"}
-    assert {info.hash_algorithm for info in infos} == {"SHA256"}
-    assert {info.signer_user_id for info in infos} == {
+    assert len(sigs) == 2
+    assert {sig.typ() for sig in sigs} == {"binary"}
+    assert {sig.hash_alg() for sig in sigs} == {"sha256"}
+    assert {sig.signers_userid() for sig in sigs} == {
         "patrice.lumumba@example.net",
         "steve.biko@example.net",
     }
-    assert all(info.is_one_pass for info in infos)
 
-    rsa_index = signature_index_for_key_id(infos, rsa_public_key.key_id)
-    ed_index = signature_index_for_key_id(infos, ed_public_key.key_id)
+    rsa_index = signature_index_for_key_id(sigs, rsa_public_key.key_id)
+    ed_index = signature_index_for_key_id(sigs, ed_public_key.key_id)
 
-    assert message.verify_signature(rsa_public_key, rsa_index).issuer_key_ids == [
+    assert message.verify_signature(rsa_public_key, rsa_index).issuer_key_id() == [
         rsa_public_key.key_id
     ]
-    assert message.verify_signature(ed_public_key, ed_index).issuer_key_ids == [
+    assert message.verify_signature(ed_public_key, ed_index).issuer_key_id() == [
         ed_public_key.key_id
     ]
     message.verify(rsa_public_key, index=rsa_index)
@@ -1238,27 +1227,26 @@ def test_cleartext_multi_signature_infos_and_indexed_verification() -> None:
     assert headers == {"Version": ["GnuPG v2"]}
     assert message.signature_count() == 2
 
-    infos = message.signature_infos()
+    sigs = message.signatures()
 
-    assert len(infos) == 2
-    assert {info.signature_type for info in infos} == {"text"}
-    assert {info.hash_algorithm for info in infos} == {"SHA256"}
-    assert {info.signer_user_id for info in infos} == {
+    assert len(sigs) == 2
+    assert {sig.typ() for sig in sigs} == {"text"}
+    assert {sig.hash_alg() for sig in sigs} == {"sha256"}
+    assert {sig.signers_userid() for sig in sigs} == {
         "patrice.lumumba@example.net",
         "steve.biko@example.net",
     }
-    assert all(info.is_one_pass is False for info in infos)
 
-    rsa_index = signature_index_for_key_id(infos, rsa_public_key.key_id)
-    ed_index = signature_index_for_key_id(infos, ed_public_key.key_id)
+    rsa_index = signature_index_for_key_id(sigs, rsa_public_key.key_id)
+    ed_index = signature_index_for_key_id(sigs, ed_public_key.key_id)
 
-    assert message.verify_signature(rsa_public_key, rsa_index).issuer_key_ids == [
+    assert message.verify_signature(rsa_public_key, rsa_index).issuer_key_id() == [
         rsa_public_key.key_id
     ]
-    assert message.verify_signature(ed_public_key, ed_index).issuer_key_ids == [
+    assert message.verify_signature(ed_public_key, ed_index).issuer_key_id() == [
         ed_public_key.key_id
     ]
-    assert message.verify_signature(rsa_public_key).issuer_key_ids == [
+    assert message.verify_signature(rsa_public_key).issuer_key_id() == [
         rsa_public_key.key_id
     ]
 
@@ -1276,11 +1264,12 @@ def test_rfc9580_v6_cleartext_signature_info_exposes_salt() -> None:
     assert message.signature_count() == 1
 
     info = message.verify_signature(public_key)
-    assert info.version == 6
-    assert info.signature_type == "text"
-    assert info.hash_algorithm == "SHA512"
-    assert info.issuer_fingerprints == [public_key.fingerprint]
-    assert info.salt is not None
-    assert len(info.salt) == 32
-    assert info.signed_hash_value is not None
-    assert message.signature_infos()[0].salt == info.salt
+    assert info.version() == 6
+    assert info.typ() == "text"
+    assert info.hash_alg() == "sha512"
+    assert info.issuer_fingerprint() == [public_key.fingerprint]
+    salt = info.salt()
+    assert salt is not None
+    assert len(salt) == 32
+    assert info.signed_hash_value() is not None
+    assert message.signatures()[0].salt() == salt

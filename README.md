@@ -11,6 +11,7 @@ Python bindings for [`rPGP`](https://github.com/rpgp/rpgp), exposed as the `open
 - support for RFC 9580
 - a typed Python surface (`.pyi` stubs ship with the package),
 - wheels for Python 3.10+,
+- core objects shaped after Rust `pgp` composed objects and packet variants,
 - high-level helpers for common signing/encryption workflows,
 - detailed inspection APIs for packets, signatures, key bindings, and generated key material.
 
@@ -37,6 +38,11 @@ When you need the underlying Rust semantics or want to compare behaviour against
 - [`pgp` crate API docs on docs.rs](https://docs.rs/pgp/latest/pgp/)
 - [RFC 9580](https://www.rfc-editor.org/rfc/rfc9580)
 
+## Breaking changes in 0.20.0
+
+Version `0.20.0` updates the underlying Rust `pgp` crate to `0.20.0` and intentionally reshapes core Python objects around the upstream object graph. `Message.from_armor()` and `Message.from_bytes()` now return concrete message variants where possible, such as `LiteralMessage`, `CompressedMessage`, `SignedMessage`, and `EncryptedMessage`. Key and subkey access is no longer centered on flattened subkey objects: use nested packet attributes such as `public_key.primary_key`, `public_key.details`, `public_key.public_subkeys[0].key`, and `secret_key.secret_subkeys[0].key`.
+Top-level `*Info` compatibility helpers are no longer part of the main parity surface. Message inspection helpers now live under `openpgp.inspect`.
+
 ## Use cases
 
 ### 1. Parse and inspect transferable keys
@@ -49,17 +55,21 @@ public_key.verify_bindings()
 
 secret_key, _ = SecretKey.from_armor(secret_key_armor)
 assert secret_key.to_public_key().fingerprint == public_key.fingerprint
-assert public_key.public_subkey_count >= 0
-assert secret_key.secret_subkey_count >= 0
+assert public_key.primary_key.fingerprint == public_key.fingerprint
+assert public_key.details.users[0].id == public_key.user_ids[0]
 
 if public_key.public_subkeys:
-    assert public_key.public_subkeys[0].fingerprint == public_key.subkey_bindings()[0].fingerprint
+    signed_subkey = public_key.public_subkeys[0]
+    assert signed_subkey.signatures[0].typ() == "subkey-binding"
 if secret_key.secret_subkeys:
+    signed_secret_subkey = secret_key.secret_subkeys[0]
     assert (
-        secret_key.secret_subkeys[0].signed_public_key().fingerprint
-        == secret_key.public_subkeys[0].fingerprint
+        signed_secret_subkey.signed_public_key().key.fingerprint
+        == signed_secret_subkey.key.fingerprint
     )
 ```
+
+The primary API mirrors upstream Rust objects: `PublicKey` and `SecretKey` are transferable signed keys, `primary_key` is the key packet, `details` contains signed users and signature packets, and subkeys are `SignedPublicSubKey` or `SignedSecretSubKey` objects with nested `key` packets and packet-shaped `signatures`. `public_params` returns typed public-parameter objects with variant fields such as RSA `key.n`/`key.e`, DSA `key.p`/`key.q`/`key.g`/`key.y`, ECDSA `key`, ECDH `p`/`hash`/`alg_sym`, and Ed/X key bytes where the upstream crate exposes them.
 
 ### 2. Sign and verify messages and detached signatures
 
@@ -73,9 +83,9 @@ assert message.payload_text() == "hello world"
 
 signature = DetachedSignature.sign_binary(b"hello world", secret_key)
 signature.verify(public_key, b"hello world")
-info = signature.signature_info()
-assert info.signature_type == "binary"
-assert info.hash_algorithm == "SHA256"
+info = signature.signature
+assert info.typ() == "binary"
+assert info.hash_alg() == "sha256"
 
 text_signature = DetachedSignature.sign_text(
     "hello\nworld\n",
@@ -83,7 +93,7 @@ text_signature = DetachedSignature.sign_text(
     hash_algorithm="sha512",
 )
 text_signature.verify_text(public_key, "hello\r\nworld\r\n")
-assert text_signature.signature_info().hash_algorithm == "SHA512"
+assert text_signature.signature.hash_alg() == "sha512"
 
 multi_signed = sign_message_many(
     b"hello world",
@@ -175,7 +185,7 @@ message_bytes = encrypt_message_to_recipient_bytes(
 
 message = Message.from_bytes(message_bytes)
 pkesk = message.public_key_encrypted_session_key_packets()[0]
-edata = message.encrypted_data_packet()
+edata = message.edata
 
 assert pkesk.recipient_is_anonymous is False
 assert edata.kind == "seipd-v2"
@@ -245,7 +255,7 @@ writer = io.StringIO()
 
 message, _ = Message.from_armor(writer.getvalue())
 assert message.literal_mode() == "utf8"
-assert message.signature_infos()[0].signature_type == "text"
+assert message.signatures()[0].typ() == "text"
 ```
 
 ### 6. Generate modern RFC 9580-compatible key material
@@ -298,6 +308,7 @@ assert secret_key.version == 6
 assert public_key.public_key_algorithm == "ed25519"
 assert public_key.public_params.kind == "ed25519"
 assert public_key.public_params.curve == "ed25519"
+assert len(public_key.public_params.key) == 32
 assert public_key.packet_version == PacketHeaderVersion.new()
 
 signed = sign_message(b"generated payload", secret_key)
@@ -378,13 +389,13 @@ This result is shown separately: `rpgp-py` defaults to modern **SEIPDv2 + AEAD (
 
 ### Table of results
 
-| Operation | rpgp-py | PGPy13 | PGPy |
-| --- | ---: | ---: | ---: |
-| Parse armored public key | 0.011 ms | 0.786 ms | 0.776 ms |
-| Parse armored secret key | 0.156 ms | 1.473 ms | 1.455 ms |
-| Detached sign + verify | 2.453 ms | 61.329 ms | 61.420 ms |
-| Encrypt + decrypt to recipient | 2.537 ms | 122.726 ms | 120.701 ms |
-| Encrypt + decrypt with password | 62.369 ms | 50.346 ms | 50.289 ms |
+| Operation                       |   rpgp-py |     PGPy13 |       PGPy |
+|---------------------------------|----------:|-----------:|-----------:|
+| Parse armored public key        |  0.011 ms |   0.786 ms |   0.776 ms |
+| Parse armored secret key        |  0.156 ms |   1.473 ms |   1.455 ms |
+| Detached sign + verify          |  2.453 ms |  61.329 ms |  61.420 ms |
+| Encrypt + decrypt to recipient  |  2.537 ms | 122.726 ms | 120.701 ms |
+| Encrypt + decrypt with password | 62.369 ms |  50.346 ms |  50.289 ms |
 
 
 ### Reproduction
