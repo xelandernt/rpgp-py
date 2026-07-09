@@ -1,7 +1,10 @@
+use crate::composed::keys::*;
 use crate::conversions::*;
 use crate::info::*;
-use crate::keys::*;
-use crate::packets::*;
+use crate::packet::{
+    encrypted::*,
+    signatures::{Signature as PacketSignature, signature_packet_from_raw},
+};
 use crate::serialization::*;
 use crate::*;
 use pgp::{
@@ -517,7 +520,7 @@ impl Message {
     ///
     /// This reads the message to the end to finalize one-pass signature verification state,
     /// mirroring the requirements of RFC 9580 one-pass signatures.
-    fn signatures(&self) -> PyResult<Vec<hierarchy::Signature>> {
+    fn signatures(&self) -> PyResult<Vec<PacketSignature>> {
         let mut message = prepare_message_for_content(&self.source).map_err(to_py_err)?;
         message.as_data_vec().map_err(to_py_err)?;
 
@@ -526,7 +529,7 @@ impl Message {
                 .signatures()
                 .ok_or_else(|| to_py_err("cannot inspect signatures before reading the message"))?
                 .iter()
-                .map(|sig| hierarchy::signature_packet_from_raw(sig.signature()))
+                .map(|sig| signature_packet_from_raw(sig.signature()))
                 .collect()),
             PgpMessage::Encrypted { .. } => Err(to_py_err(
                 "message must be decrypted before inspecting signatures",
@@ -569,7 +572,7 @@ impl Message {
         &self,
         key: PyRef<'_, SignedPublicKey>,
         index: usize,
-    ) -> PyResult<hierarchy::Signature> {
+    ) -> PyResult<PacketSignature> {
         let mut message = prepare_message_for_content(&self.source).map_err(to_py_err)?;
         message.as_data_vec().map_err(to_py_err)?;
 
@@ -582,10 +585,7 @@ impl Message {
                     .get(index)
                     .ok_or_else(|| to_py_err("signature index out of range"))?;
                 let verifier = select_verifier_for_signature(&key.inner, signature.signature())?;
-                (
-                    hierarchy::signature_packet_from_raw(signature.signature()),
-                    verifier,
-                )
+                (signature_packet_from_raw(signature.signature()), verifier)
             }
             PgpMessage::Encrypted { .. } => {
                 return Err(to_py_err(
@@ -613,11 +613,7 @@ impl Message {
     /// By default, this verifies the first signature on the message. Pass ``index`` to target a
     /// later signature in a multi-signed message.
     #[pyo3(signature = (key, index=0))]
-    fn verify(
-        &self,
-        key: PyRef<'_, SignedPublicKey>,
-        index: usize,
-    ) -> PyResult<hierarchy::Signature> {
+    fn verify(&self, key: PyRef<'_, SignedPublicKey>, index: usize) -> PyResult<PacketSignature> {
         self.verify_signature(key, index)
     }
 
@@ -842,10 +838,10 @@ impl DecryptedMessage {
     }
 
     /// Return signature packets for every signature revealed by decryption.
-    fn signatures(&self) -> Vec<hierarchy::Signature> {
+    fn signatures(&self) -> Vec<PacketSignature> {
         self.signatures
             .iter()
-            .map(|sig| hierarchy::signature_packet_from_raw(&sig.signature))
+            .map(|sig| signature_packet_from_raw(&sig.signature))
             .collect()
     }
 
@@ -858,7 +854,7 @@ impl DecryptedMessage {
         &self,
         key: PyRef<'_, SignedPublicKey>,
         index: usize,
-    ) -> PyResult<hierarchy::Signature> {
+    ) -> PyResult<PacketSignature> {
         if self.signatures.is_empty() {
             return Err(to_py_err("message was not signed"));
         }
@@ -869,7 +865,7 @@ impl DecryptedMessage {
             .ok_or_else(|| to_py_err("signature index out of range"))?;
         let verifier = select_verifier_for_signature(&key.inner, &signature.signature)?;
         verifier.verify_signature(&signature.signature, self.payload.as_slice())?;
-        Ok(hierarchy::signature_packet_from_raw(&signature.signature))
+        Ok(signature_packet_from_raw(&signature.signature))
     }
 
     /// Verify a signed decrypted payload against a public key.
@@ -877,11 +873,7 @@ impl DecryptedMessage {
     /// By default, this verifies the first signature on the decrypted payload. Pass ``index`` to
     /// target a later signature in a multi-signed payload.
     #[pyo3(signature = (key, index=0))]
-    fn verify(
-        &self,
-        key: PyRef<'_, SignedPublicKey>,
-        index: usize,
-    ) -> PyResult<hierarchy::Signature> {
+    fn verify(&self, key: PyRef<'_, SignedPublicKey>, index: usize) -> PyResult<PacketSignature> {
         self.verify_signature(key, index)
     }
 
@@ -1046,8 +1038,8 @@ impl DetachedSignature {
     }
 
     #[getter]
-    fn signature(&self) -> hierarchy::Signature {
-        hierarchy::signature_packet_from_raw(&self.inner.signature)
+    fn signature(&self) -> PacketSignature {
+        signature_packet_from_raw(&self.inner.signature)
     }
 
     /// Verify a detached signature against a public key and payload.
@@ -1061,7 +1053,7 @@ impl DetachedSignature {
         &self,
         key: PyRef<'_, SignedPublicKey>,
         data: &[u8],
-    ) -> PyResult<hierarchy::Signature> {
+    ) -> PyResult<PacketSignature> {
         self.verify(key, data)?;
         Ok(self.signature())
     }
@@ -1092,7 +1084,7 @@ impl DetachedSignature {
         py: Python<'_>,
         key: PyRef<'_, SignedPublicKey>,
         path: PathBuf,
-    ) -> PyResult<hierarchy::Signature> {
+    ) -> PyResult<PacketSignature> {
         self.verify_file(py, key, path)?;
         Ok(self.signature())
     }
@@ -1111,7 +1103,7 @@ impl DetachedSignature {
         &self,
         key: PyRef<'_, SignedPublicKey>,
         text: &str,
-    ) -> PyResult<hierarchy::Signature> {
+    ) -> PyResult<PacketSignature> {
         self.verify_text(key, text)?;
         Ok(self.signature())
     }
@@ -1184,11 +1176,11 @@ impl CleartextSignedMessage {
     }
 
     /// Return signature packets for every cleartext signature.
-    fn signatures(&self) -> Vec<hierarchy::Signature> {
+    fn signatures(&self) -> Vec<PacketSignature> {
         self.inner
             .signatures()
             .iter()
-            .map(hierarchy::signature_packet_from_raw)
+            .map(signature_packet_from_raw)
             .collect()
     }
 
@@ -1200,7 +1192,7 @@ impl CleartextSignedMessage {
         &self,
         key: PyRef<'_, SignedPublicKey>,
         index: Option<usize>,
-    ) -> PyResult<hierarchy::Signature> {
+    ) -> PyResult<PacketSignature> {
         let signed_text = self.inner.signed_text();
         let signatures = self.inner.signatures();
 
@@ -1210,7 +1202,7 @@ impl CleartextSignedMessage {
                 .ok_or_else(|| to_py_err("signature index out of range"))?;
             let verifier = select_verifier_for_signature(&key.inner, signature)?;
             verifier.verify_signature(signature, signed_text.as_bytes())?;
-            return Ok(hierarchy::signature_packet_from_raw(signature));
+            return Ok(signature_packet_from_raw(signature));
         }
 
         let mut last_selector_error: Option<PyErr> = None;
@@ -1226,7 +1218,7 @@ impl CleartextSignedMessage {
                 .verify_signature(signature, signed_text.as_bytes())
                 .is_ok()
             {
-                return Ok(hierarchy::signature_packet_from_raw(signature));
+                return Ok(signature_packet_from_raw(signature));
             }
         }
 
@@ -1241,7 +1233,7 @@ impl CleartextSignedMessage {
         &self,
         key: PyRef<'_, SignedPublicKey>,
         index: Option<usize>,
-    ) -> PyResult<hierarchy::Signature> {
+    ) -> PyResult<PacketSignature> {
         self.verify_signature(key, index)
     }
 

@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
     io::{Cursor, Read},
-    sync::Mutex,
 };
 
 use pgp::{
@@ -60,79 +59,76 @@ fn to_py_err(error: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(error.to_string())
 }
 
-mod builder;
+mod composed;
 mod conversions;
-mod hierarchy;
 mod info;
-mod key_params;
-mod keys;
-mod messages;
-mod packets;
+mod packet;
 mod serialization;
+mod types;
 mod util;
 
 #[pymodule]
 pub(crate) fn _openpgp(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_class::<builder::PyArmorOptions>()?;
-    module.add_class::<builder::PyMessageBuilder>()?;
-    module.add_class::<key_params::EncryptionCaps>()?;
-    module.add_class::<key_params::PyPacketHeaderVersion>()?;
-    module.add_class::<key_params::KeyType>()?;
-    module.add_class::<key_params::PyStringToKey>()?;
-    module.add_class::<key_params::PyS2kParams>()?;
-    module.add_class::<key_params::SubkeyParams>()?;
-    module.add_class::<key_params::SubkeyParamsBuilder>()?;
-    module.add_class::<key_params::SecretKeyParams>()?;
-    module.add_class::<key_params::SecretKeyParamsBuilder>()?;
-    module.add_class::<hierarchy::PublicParams>()?;
-    module.add_class::<hierarchy::RsaPublicKey>()?;
-    module.add_class::<hierarchy::DsaPublicKey>()?;
-    module.add_class::<hierarchy::RsaPublicParams>()?;
-    module.add_class::<hierarchy::DsaPublicParams>()?;
-    module.add_class::<hierarchy::EcdsaPublicParams>()?;
-    module.add_class::<hierarchy::EcdhPublicParams>()?;
-    module.add_class::<hierarchy::ElgamalPublicParams>()?;
-    module.add_class::<hierarchy::EdDsaLegacyPublicParams>()?;
-    module.add_class::<hierarchy::Ed25519PublicParams>()?;
-    module.add_class::<hierarchy::X25519PublicParams>()?;
-    module.add_class::<hierarchy::X448PublicParams>()?;
-    module.add_class::<hierarchy::Ed448PublicParams>()?;
-    module.add_class::<hierarchy::UnknownPublicParams>()?;
-    module.add_class::<hierarchy::PublicKey>()?;
-    module.add_class::<hierarchy::PublicSubkey>()?;
-    module.add_class::<hierarchy::SecretKey>()?;
-    module.add_class::<hierarchy::SecretSubkey>()?;
-    module.add_class::<hierarchy::Signature>()?;
-    module.add_class::<hierarchy::SignedUser>()?;
-    module.add_class::<hierarchy::SignedUserAttribute>()?;
-    module.add_class::<hierarchy::SignedKeyDetails>()?;
-    module.add_class::<hierarchy::SignedPublicSubKey>()?;
-    module.add_class::<hierarchy::SignedSecretSubKey>()?;
-    module.add_class::<keys::SignedPublicKey>()?;
-    module.add_class::<keys::SignedSecretKey>()?;
-    module.add_class::<packets::PublicKeyEncryptedSessionKey>()?;
-    module.add_class::<packets::SymKeyEncryptedSessionKey>()?;
-    module.add_class::<packets::EncryptedDataPacket>()?;
-    module.add_class::<packets::SymEncryptedData>()?;
-    module.add_class::<packets::SymEncryptedProtectedData>()?;
-    module.add_class::<packets::GnupgAeadData>()?;
-    module.add_class::<messages::Message>()?;
-    module.add_class::<messages::DecryptedMessage>()?;
-    module.add_class::<messages::LiteralDataHeader>()?;
-    module.add_class::<messages::LiteralMessage>()?;
-    module.add_class::<messages::CompressedMessage>()?;
-    module.add_class::<messages::SignedMessage>()?;
-    module.add_class::<messages::EncryptedMessage>()?;
-    module.add_class::<messages::DecryptedLiteralMessage>()?;
-    module.add_class::<messages::DecryptedCompressedMessage>()?;
-    module.add_class::<messages::DecryptedSignedMessage>()?;
+    module.add_class::<composed::PyArmorOptions>()?;
+    module.add_class::<composed::PyMessageBuilder>()?;
+    module.add_class::<composed::EncryptionCaps>()?;
+    module.add_class::<types::PyPacketHeaderVersion>()?;
+    module.add_class::<composed::KeyType>()?;
+    module.add_class::<types::PyStringToKey>()?;
+    module.add_class::<types::PyS2kParams>()?;
+    module.add_class::<composed::SubkeyParams>()?;
+    module.add_class::<composed::SubkeyParamsBuilder>()?;
+    module.add_class::<composed::SecretKeyParams>()?;
+    module.add_class::<composed::SecretKeyParamsBuilder>()?;
+    module.add_class::<types::PublicParams>()?;
+    module.add_class::<types::RsaPublicKey>()?;
+    module.add_class::<types::DsaPublicKey>()?;
+    module.add_class::<types::RsaPublicParams>()?;
+    module.add_class::<types::DsaPublicParams>()?;
+    module.add_class::<types::EcdsaPublicParams>()?;
+    module.add_class::<types::EcdhPublicParams>()?;
+    module.add_class::<types::ElgamalPublicParams>()?;
+    module.add_class::<types::EdDsaLegacyPublicParams>()?;
+    module.add_class::<types::Ed25519PublicParams>()?;
+    module.add_class::<types::X25519PublicParams>()?;
+    module.add_class::<types::X448PublicParams>()?;
+    module.add_class::<types::Ed448PublicParams>()?;
+    module.add_class::<types::UnknownPublicParams>()?;
+    module.add_class::<packet::PublicKey>()?;
+    module.add_class::<packet::PublicSubkey>()?;
+    module.add_class::<packet::SecretKey>()?;
+    module.add_class::<packet::SecretSubkey>()?;
+    module.add_class::<packet::Signature>()?;
+    module.add_class::<composed::SignedUser>()?;
+    module.add_class::<composed::SignedUserAttribute>()?;
+    module.add_class::<composed::SignedKeyDetails>()?;
+    module.add_class::<composed::SignedPublicSubKey>()?;
+    module.add_class::<composed::SignedSecretSubKey>()?;
+    module.add_class::<composed::SignedPublicKey>()?;
+    module.add_class::<composed::SignedSecretKey>()?;
+    module.add_class::<packet::PublicKeyEncryptedSessionKey>()?;
+    module.add_class::<packet::SymKeyEncryptedSessionKey>()?;
+    module.add_class::<packet::EncryptedDataPacket>()?;
+    module.add_class::<packet::SymEncryptedData>()?;
+    module.add_class::<packet::SymEncryptedProtectedData>()?;
+    module.add_class::<packet::GnupgAeadData>()?;
+    module.add_class::<composed::Message>()?;
+    module.add_class::<composed::DecryptedMessage>()?;
+    module.add_class::<composed::messages::LiteralDataHeader>()?;
+    module.add_class::<composed::LiteralMessage>()?;
+    module.add_class::<composed::messages::CompressedMessage>()?;
+    module.add_class::<composed::SignedMessage>()?;
+    module.add_class::<composed::EncryptedMessage>()?;
+    module.add_class::<composed::DecryptedLiteralMessage>()?;
+    module.add_class::<composed::DecryptedCompressedMessage>()?;
+    module.add_class::<composed::DecryptedSignedMessage>()?;
     module.add_class::<info::KeyFlags>()?;
     module.add_class::<info::UserAttribute>()?;
     module.add_class::<info::Features>()?;
     module.add_class::<info::Notation>()?;
     module.add_class::<info::RevocationKey>()?;
-    module.add_class::<messages::DetachedSignature>()?;
-    module.add_class::<messages::CleartextSignedMessage>()?;
+    module.add_class::<composed::DetachedSignature>()?;
+    module.add_class::<composed::CleartextSignedMessage>()?;
     util::register(module)?;
     Ok(())
 }

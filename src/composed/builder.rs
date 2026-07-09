@@ -28,12 +28,12 @@ use crate::conversions::{
 };
 use crate::{
     Headers,
-    key_params::PyStringToKey,
-    keys::{
+    composed::keys::{
         PublicRecipient, SecretSigner, public_recipient_from_python, secret_signer_from_python,
     },
     serialization::raw_session_key_from_bytes,
     to_py_err,
+    types::PyStringToKey,
 };
 
 #[pyclass(

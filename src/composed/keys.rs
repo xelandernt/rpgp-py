@@ -1,13 +1,15 @@
-use crate::conversions::*;
-use crate::hierarchy::{
-    PublicKey, SecretKey, SignedKeyDetails, SignedPublicSubKey as PySignedPublicSubKey,
-    SignedSecretSubKey as PySignedSecretSubKey, public_key_packet_object, public_params_object,
-    secret_key_packet_object, signed_key_details_from_raw, signed_public_subkey_from_raw,
-    signed_secret_subkey_from_raw,
+use crate::composed::key_details::{
+    SignedKeyDetails, SignedPublicSubKey as PySignedPublicSubKey,
+    SignedSecretSubKey as PySignedSecretSubKey, signed_key_details_from_raw,
+    signed_public_subkey_from_raw, signed_secret_subkey_from_raw,
 };
+use crate::conversions::*;
 use crate::info::{lossy_user_ids, public_key_algorithm_name};
-use crate::key_params::*;
+use crate::packet::key_packets::{
+    PublicKey, SecretKey, public_key_packet_object, secret_key_packet_object,
+};
 use crate::serialization::*;
+use crate::types::{PyPacketHeaderVersion, PyS2kParams, public_params::public_params_object};
 use crate::*;
 use pgp::composed::{
     Encryption as PgpEncryption, EncryptionSeipdV1, EncryptionSeipdV2,
