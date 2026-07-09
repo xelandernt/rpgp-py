@@ -16,15 +16,6 @@ Python bindings for [`rPGP`](https://github.com/rpgp/rpgp), exposed as the `open
 - a `MessageBuilder`-driven API for common signing/encryption workflows,
 - detailed inspection APIs for packets, signatures, key bindings, and generated key material.
 
-## Why use `rpgp-py` instead of `PGPy` or `PGPy13`?
-
-Broadly:
-
-- **RFC 9580 coverage:** `rpgp-py` follows the Rust `pgp` crate, which targets newer OpenPGP work such as RFC 9580-compatible v6 key material and modern curves/packet handling. `PGPy` and `PGPy13` are still RFC 4880.
-- **Rust core:** the cryptographic core is implemented in Rust and exposed through a Python-first API.
-- **Typed builders and inspectors:** the package exposes typed builders for key generation plus rich metadata for self-signatures, key flags, features, user bindings, S2K settings, and public-key parameters.
-- **Python 3.13 support:** `PGPy` still imports `imghdr`, which was removed from the standard library in Python 3.13. `PGPy13` exists as a compatibility fork; `rpgp-py` targets current Python directly.
-
 ## Installation
 
 ```bash
@@ -426,42 +417,6 @@ assert primary_s2k.usage == "aead"
 assert primary_s2k.aead_algorithm == "ocb"
 assert primary_s2k.string_to_key is not None
 assert primary_s2k.string_to_key.kind == "argon2"
-```
-
-## Benchmarks
-
-### Median runtime graph (1 KiB payload, lower is better)
-
-![Grouped benchmark chart for the shared workflows](docs/benchmarks/median-runtime.svg)
-
-`rpgp-py` is substantially faster: roughly **9x–71x** faster for key parsing and **25x–48x** faster for the sign/verify and recipient-encryption loops.
-
-### Password-encryption benchmark
-
-![Grouped benchmark chart for password encryption and decryption](docs/benchmarks/password-runtime.svg)
-
-This result is shown separately: `rpgp-py` defaults to modern **SEIPDv2 + AEAD (OCB)** password-protected messages, while `PGPy`/`PGPy13` remain RFC 4880-era implementations.
-
-### Table of results
-
-| Operation                       |   rpgp-py |     PGPy13 |       PGPy |
-|---------------------------------|----------:|-----------:|-----------:|
-| Parse armored public key        |  0.011 ms |   0.786 ms |   0.776 ms |
-| Parse armored secret key        |  0.156 ms |   1.473 ms |   1.455 ms |
-| Detached sign + verify          |  2.453 ms |  61.329 ms |  61.420 ms |
-| Encrypt + decrypt to recipient  |  2.537 ms | 122.726 ms | 120.701 ms |
-| Encrypt + decrypt with password | 62.369 ms |  50.346 ms |  50.289 ms |
-
-
-### Reproduction
-
-To make that comparison reproducible, the repository now ships:
-
-- `scripts/benchmark.py` – an isolated benchmark runner,
-- `docs/benchmarks/results.json` – the committed raw results used below.
-
-```bash
-uv run --python 3.12 python scripts/benchmark.py
 ```
 
 ## Versioning
