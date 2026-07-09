@@ -11,8 +11,9 @@ Python bindings for [`rPGP`](https://github.com/rpgp/rpgp), exposed as the `open
 - support for RFC 9580
 - a typed Python surface (`.pyi` stubs ship with the package),
 - wheels for Python 3.10+,
-- core objects shaped after Rust `pgp` composed objects and packet variants,
-- high-level helpers for common signing/encryption workflows,
+- Rust-shaped namespaces (`openpgp.composed`, `openpgp.packet`, `openpgp.types`, `openpgp.crypto`) that mirror the upstream `pgp` crate,
+- optional convenience helpers in `openpgp.util`,
+- a `MessageBuilder`-driven API for common signing/encryption workflows,
 - detailed inspection APIs for packets, signatures, key bindings, and generated key material.
 
 ## Why use `rpgp-py` instead of `PGPy` or `PGPy13`?
@@ -40,20 +41,57 @@ When you need the underlying Rust semantics or want to compare behaviour against
 
 ## Breaking changes in 0.20.0
 
-Version `0.20.0` updates the underlying Rust `pgp` crate to `0.20.0` and intentionally reshapes core Python objects around the upstream object graph. `Message.from_armor()` and `Message.from_bytes()` now return concrete message variants where possible, such as `LiteralMessage`, `CompressedMessage`, `SignedMessage`, and `EncryptedMessage`. Key and subkey access is no longer centered on flattened subkey objects: use nested packet attributes such as `public_key.primary_key`, `public_key.details`, `public_key.public_subkeys[0].key`, and `secret_key.secret_subkeys[0].key`.
-Top-level `*Info` compatibility helpers are no longer part of the main parity surface. Message inspection helpers now live under `openpgp.inspect`.
+Version `0.20.0` updates the underlying Rust `pgp` crate to `0.20.0` and reshapes
+the Python API around the upstream module layout so that rPGP docs translate
+directly. The public surface is now organized into Rust-shaped namespaces:
+
+- `openpgp.composed` mirrors `pgp::composed`: `SignedPublicKey`,
+  `SignedSecretKey`, `Message`, `MessageBuilder`, `DetachedSignature`,
+  `CleartextSignedMessage`, the key-generation builders, and `ArmorOptions`.
+- `openpgp.packet` mirrors `pgp::packet`: `PublicKey`, `SecretKey`,
+  `PublicSubkey`, `SecretSubkey`, `Signature`, `PublicKeyEncryptedSessionKey`,
+  and the encrypted-data packet types.
+- `openpgp.types` mirrors `pgp::types`: public-parameter objects, `StringToKey`,
+  `S2kParams`, and `PacketHeaderVersion`.
+- `openpgp.crypto.*` mirrors `pgp::crypto::*` algorithm names.
+- `openpgp.util` contains binding-specific convenience helpers such as
+  `sign_message`, `sign_cleartext_message`, `encrypt_message_to_recipient`, and
+  `encrypt_message_with_password`.
+
+Top-level `openpgp` now exposes only these namespace modules; object and helper
+aliases were removed. Convenience helpers are available from `openpgp.util`
+instead of as top-level `openpgp` functions. Compatibility spellings from
+earlier releases were removed rather than deprecated:
+
+- transferable keys are `openpgp.composed.SignedPublicKey` /
+  `openpgp.composed.SignedSecretKey` (the old top-level `PublicKey` / `SecretKey`
+  now name the *packet* types in `openpgp.packet`),
+- message payload access uses the Rust-shaped `Message.as_data_vec()` /
+  `Message.as_data_string()` (the `payload_bytes` / `payload_text` convenience
+  names were removed),
+- signing, encryption, and cleartext workflows go through `MessageBuilder`,
+  `DetachedSignature`, and `CleartextSignedMessage` instead of top-level helper
+  functions.
+
+`Message.from_armor()` and `Message.from_bytes()` return concrete message
+variants where possible, such as `LiteralMessage`, `CompressedMessage`,
+`SignedMessage`, and `EncryptedMessage`. Key and subkey access follows the
+upstream object graph: `public_key.primary_key`, `public_key.details`,
+`public_key.public_subkeys[0].key`, and `secret_key.secret_subkeys[0].key`.
+For quick message classification, parse with `openpgp.composed.Message` and use
+the message object's `kind`, `is_nested`, and `headers` properties.
 
 ## Use cases
 
 ### 1. Parse and inspect transferable keys
 
 ```python
-from openpgp import PublicKey, SecretKey
+from openpgp.composed import SignedPublicKey, SignedSecretKey
 
-public_key, _ = PublicKey.from_armor(public_key_armor)
+public_key, _ = SignedPublicKey.from_armor(public_key_armor)
 public_key.verify_bindings()
 
-secret_key, _ = SecretKey.from_armor(secret_key_armor)
+secret_key, _ = SignedSecretKey.from_armor(secret_key_armor)
 assert secret_key.to_public_key().fingerprint == public_key.fingerprint
 assert public_key.primary_key.fingerprint == public_key.fingerprint
 assert public_key.details.users[0].id == public_key.user_ids[0]
@@ -69,36 +107,56 @@ if secret_key.secret_subkeys:
     )
 ```
 
-The primary API mirrors upstream Rust objects: `PublicKey` and `SecretKey` are transferable signed keys, `primary_key` is the key packet, `details` contains signed users and signature packets, and subkeys are `SignedPublicSubKey` or `SignedSecretSubKey` objects with nested `key` packets and packet-shaped `signatures`. `public_params` returns typed public-parameter objects with variant fields such as RSA `key.n`/`key.e`, DSA `key.p`/`key.q`/`key.g`/`key.y`, ECDSA `key`, ECDH `p`/`hash`/`alg_sym`, and Ed/X key bytes where the upstream crate exposes them.
+The primary API mirrors upstream Rust objects: `SignedPublicKey` and
+`SignedSecretKey` are transferable signed keys (`pgp::composed`), `primary_key`
+is the `openpgp.packet` key packet, `details` contains signed users and signature
+packets, and subkeys are `SignedPublicSubKey` or `SignedSecretSubKey` objects with
+nested `key` packets and packet-shaped `signatures`. `public_params` returns typed
+public-parameter objects (from `openpgp.types`) with variant fields such as RSA
+`key.n`/`key.e`, DSA `key.p`/`key.q`/`key.g`/`key.y`, ECDSA `key`, ECDH
+`p`/`hash`/`alg_sym`, and Ed/X key bytes where the upstream crate exposes them.
 
 ### 2. Sign and verify messages and detached signatures
 
 ```python
-from openpgp import DetachedSignature, Message, sign_message, sign_message_many
+from openpgp.composed import DetachedSignature, Message, MessageBuilder
 
-signed = sign_message(b"hello world", secret_key)
+
+class SecureRandom:
+    def randbytes(self, n: int) -> bytes:
+        import os
+
+        return os.urandom(n)
+
+
+signed = (
+    MessageBuilder.from_bytes("", b"hello world")
+    .sign(secret_key)
+    .to_armored_string()
+)
 message, _ = Message.from_armor(signed)
 message.verify(public_key)
-assert message.payload_text() == "hello world"
+assert message.as_data_string() == "hello world"
 
-signature = DetachedSignature.sign_binary(b"hello world", secret_key)
+signature = DetachedSignature.sign_binary_data(
+    SecureRandom(), secret_key, None, "sha256", b"hello world"
+)
 signature.verify(public_key, b"hello world")
 info = signature.signature
 assert info.typ() == "binary"
 assert info.hash_alg() == "sha256"
 
-text_signature = DetachedSignature.sign_text(
-    "hello\nworld\n",
-    secret_key,
-    hash_algorithm="sha512",
+text_signature = DetachedSignature.sign_text_data(
+    SecureRandom(), secret_key, None, "sha512", b"hello\nworld\n"
 )
 text_signature.verify_text(public_key, "hello\r\nworld\r\n")
 assert text_signature.signature.hash_alg() == "sha512"
 
-multi_signed = sign_message_many(
-    b"hello world",
-    [secret_key, other_secret_key],
-    hash_algorithm="sha384",
+multi_signed = (
+    MessageBuilder.from_bytes("", b"hello world")
+    .sign(secret_key, None, "sha384")
+    .sign(other_secret_key, None, "sha384")
+    .to_armored_string()
 )
 multi_message, _ = Message.from_armor(multi_signed)
 assert multi_message.signature_count() == 2
@@ -107,26 +165,15 @@ assert multi_message.signature_count() == 2
 ### 3. Work with cleartext signatures
 
 ```python
-from openpgp import (
-    CleartextSignedMessage,
-    sign_cleartext_message,
-    sign_cleartext_message_many,
-)
+from openpgp.composed import CleartextSignedMessage
 
-armored = sign_cleartext_message("hello\n-world\n", secret_key)
-message, _ = CleartextSignedMessage.from_armor(armored)
+message = CleartextSignedMessage.sign("hello\n-world\n", secret_key)
+armored = message.to_armored()
+reparsed, _ = CleartextSignedMessage.from_armor(armored)
 
-assert message.signed_text() == "hello\r\n-world\r\n"
-assert message.signature_count() == 1
-message.verify(public_key)
-
-multi_armored = sign_cleartext_message_many(
-    "hello\n-world\n",
-    [secret_key, other_secret_key],
-    hash_algorithm="sha384",
-)
-multi_message, _ = CleartextSignedMessage.from_armor(multi_armored)
-assert multi_message.signature_count() == 2
+assert reparsed.signed_text() == "hello\r\n-world\r\n"
+assert reparsed.signature_count() == 1
+reparsed.verify(public_key)
 ```
 
 ### 4. Encrypt and decrypt OpenPGP messages
@@ -134,53 +181,60 @@ assert multi_message.signature_count() == 2
 Recipient encryption:
 
 ```python
-from openpgp import Message, encrypt_message_to_recipient, encrypt_message_to_recipients
+from openpgp.composed import Message, MessageBuilder
 
-recipient_encrypted = encrypt_message_to_recipient(b"secret", public_key)
+recipient_encrypted = (
+    MessageBuilder.from_bytes("", b"secret")
+    .seipd_v2("aes256", "ocb")
+    .encrypt_to_key(public_key)
+    .to_armored_string()
+)
 recipient_message, _ = Message.from_armor(recipient_encrypted)
-recipient_decrypted = recipient_message.decrypt(secret_key)
-assert recipient_decrypted.payload_bytes() == b"secret"
+recipient_decrypted = recipient_message.decrypt(None, secret_key)
+assert recipient_decrypted.as_data_vec() == b"secret"
 
-shared_encrypted = encrypt_message_to_recipients(
-    b"secret",
-    [public_key, other_public_key],
-    anonymous_recipient=True,
+shared_encrypted = (
+    MessageBuilder.from_bytes("", b"secret")
+    .seipd_v2("aes256", "ocb")
+    .encrypt_to_key_anonymous(public_key)
+    .encrypt_to_key_anonymous(other_public_key)
+    .to_armored_string()
 )
 shared_message, _ = Message.from_armor(shared_encrypted)
-assert len(shared_message.public_key_encrypted_session_key_packets()) == 2
-assert all(
-    packet.recipient_is_anonymous
-    for packet in shared_message.public_key_encrypted_session_key_packets()
-)
+packets = shared_message.public_key_encrypted_session_key_packets()
+assert len(packets) == 2
+assert all(packet.recipient_is_anonymous for packet in packets)
 ```
 
 Password encryption:
 
 ```python
-from openpgp import Message, encrypt_message_with_password
+from openpgp.composed import Message, MessageBuilder
+from openpgp.types import StringToKey
 
-password_encrypted = encrypt_message_with_password(b"secret", "hunter2")
+password_encrypted = (
+    MessageBuilder.from_bytes("", b"secret")
+    .seipd_v2("aes256", "ocb")
+    .encrypt_with_password(StringToKey.argon2(1, 4, 21), "hunter2")
+    .to_armored_string()
+)
 password_message, _ = Message.from_armor(password_encrypted)
 password_decrypted = password_message.decrypt_with_password("hunter2")
-assert password_decrypted.payload_text() == "secret"
+assert password_decrypted.as_data_string() == "secret"
 ```
 
 Binary output, packet access, and caller-supplied session keys:
 
 ```python
-from openpgp import (
-    Message,
-    encrypt_message_to_recipient_bytes,
-    encrypt_session_key_to_recipient,
-)
+from openpgp.composed import Message, MessageBuilder
 
 session_key = bytes(range(16))
-message_bytes = encrypt_message_to_recipient_bytes(
-    b"secret",
-    public_key,
-    version="seipd-v2",
-    symmetric_algorithm="aes128",
-    session_key=session_key,
+message_bytes = (
+    MessageBuilder.from_bytes("", b"secret")
+    .seipd_v2("aes128", "ocb")
+    .set_session_key(session_key)
+    .encrypt_to_key(public_key)
+    .to_vec()
 )
 
 message = Message.from_bytes(message_bytes)
@@ -189,21 +243,17 @@ edata = message.edata
 
 assert pkesk.recipient_is_anonymous is False
 assert edata.kind == "seipd-v2"
-assert message.decrypt_with_session_key(session_key).payload_bytes() == b"secret"
+assert message.decrypt_with_session_key(session_key).as_data_vec() == b"secret"
 
-raw_pkesk = encrypt_session_key_to_recipient(
-    session_key,
-    public_key,
-    version="seipd-v2",
-    symmetric_algorithm="aes128",
-).to_bytes()
+raw_pkesk = pkesk.to_bytes()
 assert raw_pkesk
 ```
 
 ### 5. Build messages with the upstream-style `MessageBuilder` API
 
 ```python
-from openpgp import ArmorOptions, Message, MessageBuilder, StringToKey
+from openpgp.composed import ArmorOptions, Message, MessageBuilder
+from openpgp.types import StringToKey
 
 armored = (
     MessageBuilder.from_bytes("hello.txt", b"Hello, world!")
@@ -220,11 +270,12 @@ decrypted = message.decrypt_with_password("hunter2")
 
 assert headers == {"Comment": ["built with MessageBuilder"]}
 assert decrypted.kind == "compressed"
-assert decrypted.payload_text() == "Hello, world!"
+assert decrypted.as_data_string() == "Hello, world!"
 assert "\n=" not in armored
 ```
 
-The same builder surface also accepts operational subkey objects when you want the Rust docs' subkey-oriented examples to translate directly:
+The same builder surface also accepts operational subkey objects when you want the
+Rust docs' subkey-oriented examples to translate directly:
 
 ```python
 subkey_signed_and_encrypted = (
@@ -236,12 +287,13 @@ subkey_signed_and_encrypted = (
 )
 ```
 
-It also exposes the remaining simple builder workflow methods for file-like objects and literal/signature mode selection:
+It also exposes the remaining simple builder workflow methods for file-like objects
+and literal/signature mode selection:
 
 ```python
 import io
 
-from openpgp import Message, MessageBuilder
+from openpgp.composed import Message, MessageBuilder
 
 writer = io.StringIO()
 
@@ -261,17 +313,16 @@ assert message.signatures()[0].typ() == "text"
 ### 6. Generate modern RFC 9580-compatible key material
 
 ```python
-from openpgp import (
+from openpgp.composed import (
     EncryptionCaps,
     KeyType,
     Message,
-    PacketHeaderVersion,
+    MessageBuilder,
     SecretKeyParamsBuilder,
     SubkeyParamsBuilder,
-    UserAttribute,
-    encrypt_message_to_recipient,
-    sign_message,
 )
+from openpgp.packet import UserAttribute
+from openpgp.types import PacketHeaderVersion
 
 secret_key = (
     SecretKeyParamsBuilder()
@@ -311,27 +362,31 @@ assert public_key.public_params.curve == "ed25519"
 assert len(public_key.public_params.key) == 32
 assert public_key.packet_version == PacketHeaderVersion.new()
 
-signed = sign_message(b"generated payload", secret_key)
+signed = MessageBuilder.from_bytes("", b"generated payload").sign(secret_key).to_armored_string()
 message, _ = Message.from_armor(signed)
 message.verify(public_key)
-assert message.payload_bytes() == b"generated payload"
+assert message.as_data_vec() == b"generated payload"
 
-encrypted = encrypt_message_to_recipient(b"secret", public_key)
+encrypted = (
+    MessageBuilder.from_bytes("", b"secret")
+    .seipd_v2("aes256", "ocb")
+    .encrypt_to_key(public_key)
+    .to_armored_string()
+)
 encrypted_message, _ = Message.from_armor(encrypted)
-assert encrypted_message.decrypt(secret_key).payload_bytes() == b"secret"
+assert encrypted_message.decrypt(None, secret_key).as_data_vec() == b"secret"
 ```
 
 ### 7. Customize secret-key S2K protection for generated keys
 
 ```python
-from openpgp import (
+from openpgp.composed import (
     EncryptionCaps,
     KeyType,
-    S2kParams,
     SecretKeyParamsBuilder,
-    StringToKey,
     SubkeyParamsBuilder,
 )
+from openpgp.types import S2kParams, StringToKey
 
 secret_key = (
     SecretKeyParamsBuilder()

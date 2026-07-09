@@ -19,15 +19,15 @@ from ._openpgp import (
     SecretKeyParamsBuilder,
     SignedKeyDetails,
     SignedMessage,
+    SignedPublicKey,
     SignedPublicSubKey,
+    SignedSecretKey,
     SignedSecretSubKey,
     SignedUser,
     SignedUserAttribute,
     SubkeyParams,
     SubkeyParamsBuilder,
 )
-from ._openpgp import PublicKey as SignedPublicKey
-from ._openpgp import SecretKey as SignedSecretKey
 
 __all__ = [
     "ArmorOptions",

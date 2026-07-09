@@ -5,9 +5,7 @@ use crate::packets::*;
 use crate::serialization::*;
 use crate::*;
 use pgp::{
-    packet::{
-        PublicKey as PgpPublicKeyPacket, PublicSubkey as PgpPublicSubkeyPacket, SubpacketData,
-    },
+    packet::{PublicKey as PgpPublicKey, PublicSubkey as PgpPublicSubkey, SubpacketData},
     types::{Fingerprint, VerifyingKey},
 };
 use pyo3::types::PyAny;
@@ -21,30 +19,30 @@ use std::{
 /// A parsed OpenPGP message.
 ///
 /// The message may be literal, compressed, signed, or encrypted.
-#[pyclass(subclass, module = "openpgp", from_py_object)]
+#[pyclass(subclass, module = "openpgp.composed", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct Message {
     pub(crate) source: Vec<u8>,
-    pub(crate) info: MessageInfo,
+    pub(crate) info: MessageSummary,
 }
 
-#[pyclass(extends = Message, module = "openpgp", skip_from_py_object)]
+#[pyclass(extends = Message, module = "openpgp.composed", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct LiteralMessage;
 
-#[pyclass(extends = Message, module = "openpgp", skip_from_py_object)]
+#[pyclass(extends = Message, module = "openpgp.composed", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct CompressedMessage;
 
-#[pyclass(extends = Message, module = "openpgp", skip_from_py_object)]
+#[pyclass(extends = Message, module = "openpgp.composed", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct SignedMessage;
 
-#[pyclass(extends = Message, module = "openpgp", skip_from_py_object)]
+#[pyclass(extends = Message, module = "openpgp.composed", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct EncryptedMessage;
 
-#[pyclass(module = "openpgp", skip_from_py_object)]
+#[pyclass(module = "openpgp.packet", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct LiteralDataHeader {
     mode: String,
@@ -86,7 +84,7 @@ fn literal_data_header_from_raw(header: &pgp::packet::LiteralDataHeader) -> Lite
 }
 
 pub(crate) fn owned_message_from_source(source: Vec<u8>) -> PyResult<Message> {
-    let info = inspect_message_from_source(&source).map_err(to_py_err)?;
+    let info = message_summary_from_source(&source).map_err(to_py_err)?;
     Ok(Message { source, info })
 }
 
@@ -119,13 +117,13 @@ pub(crate) fn message_object_from_source(py: Python<'_>, source: Vec<u8>) -> PyR
 }
 
 enum SelectedVerifier<'a> {
-    Primary(&'a SignedPublicKey),
-    Subkey(&'a SignedPublicSubKey),
+    Primary(&'a PgpSignedPublicKey),
+    Subkey(&'a PgpSignedPublicSubKey),
 }
 
 enum OwnedVerifier {
-    Primary(PgpPublicKeyPacket),
-    Subkey(PgpPublicSubkeyPacket),
+    Primary(PgpPublicKey),
+    Subkey(PgpPublicSubkey),
 }
 
 struct PythonCryptoRng<'py> {
@@ -215,7 +213,7 @@ impl SelectedVerifier<'_> {
 }
 
 fn verifier_for_issuer_fingerprint<'a>(
-    certificate: &'a SignedPublicKey,
+    certificate: &'a PgpSignedPublicKey,
     issuer_fingerprint: &Fingerprint,
 ) -> PyResult<SelectedVerifier<'a>> {
     if certificate.fingerprint() == *issuer_fingerprint {
@@ -238,7 +236,7 @@ fn verifier_for_issuer_fingerprint<'a>(
 }
 
 fn verifier_for_issuer_key_id<'a>(
-    certificate: &'a SignedPublicKey,
+    certificate: &'a PgpSignedPublicKey,
     issuer_key_id: &KeyId,
 ) -> PyResult<SelectedVerifier<'a>> {
     if certificate.legacy_key_id() == *issuer_key_id {
@@ -278,7 +276,7 @@ fn verifier_for_issuer_key_id<'a>(
 /// if the two hashed identifiers disagree, or if a matched subkey's binding
 /// signature does not verify against the primary key.
 fn select_verifier_for_signature<'a>(
-    certificate: &'a SignedPublicKey,
+    certificate: &'a PgpSignedPublicKey,
     signature: &Signature,
 ) -> PyResult<SelectedVerifier<'a>> {
     let Some(config) = signature.config() else {
@@ -401,7 +399,7 @@ impl Message {
     /// Parse an ASCII-armored OpenPGP message.
     #[staticmethod]
     fn from_armor(py: Python<'_>, data: &str) -> PyResult<(Py<PyAny>, Headers)> {
-        let info = inspect_message_from_source(data.as_bytes()).map_err(to_py_err)?;
+        let info = message_summary_from_source(data.as_bytes()).map_err(to_py_err)?;
         let headers = info.headers.clone().unwrap_or_default();
         Ok((
             message_object_from_source(py, data.as_bytes().to_vec())?,
@@ -471,23 +469,13 @@ impl Message {
     }
 
     /// Read the inner payload as bytes, automatically decompressing nested compressed layers.
-    fn payload_bytes(&self) -> PyResult<Vec<u8>> {
+    fn as_data_vec(&self) -> PyResult<Vec<u8>> {
         payload_bytes_from_source(&self.source)
     }
 
-    /// Rust-name alias for reading the inner payload as bytes.
-    fn as_data_vec(&self) -> PyResult<Vec<u8>> {
-        self.payload_bytes()
-    }
-
     /// Read the inner payload as UTF-8 text, automatically decompressing nested compressed layers.
-    fn payload_text(&self) -> PyResult<String> {
-        payload_text_from_source(&self.source)
-    }
-
-    /// Rust-name alias for reading the inner payload as UTF-8 text.
     fn as_data_string(&self) -> PyResult<String> {
-        self.payload_text()
+        payload_text_from_source(&self.source)
     }
 
     /// Return the literal data header after automatic decompression, if a literal layer exists.
@@ -529,7 +517,7 @@ impl Message {
     ///
     /// This reads the message to the end to finalize one-pass signature verification state,
     /// mirroring the requirements of RFC 9580 one-pass signatures.
-    fn signatures(&self) -> PyResult<Vec<hierarchy::SignaturePacket>> {
+    fn signatures(&self) -> PyResult<Vec<hierarchy::Signature>> {
         let mut message = prepare_message_for_content(&self.source).map_err(to_py_err)?;
         message.as_data_vec().map_err(to_py_err)?;
 
@@ -550,7 +538,7 @@ impl Message {
     /// Return the top-level public-key encrypted session key packets on an encrypted message.
     fn public_key_encrypted_session_key_packets(
         &self,
-    ) -> PyResult<Vec<PublicKeyEncryptedSessionKeyPacket>> {
+    ) -> PyResult<Vec<PublicKeyEncryptedSessionKey>> {
         let (public_key_packets, _, _) =
             top_level_encryption_packets_from_source(&self.source, &self.info.headers)?;
         Ok(public_key_packets)
@@ -559,7 +547,7 @@ impl Message {
     /// Return the top-level password-encrypted session key packets on an encrypted message.
     fn symmetric_key_encrypted_session_key_packets(
         &self,
-    ) -> PyResult<Vec<SymKeyEncryptedSessionKeyPacket>> {
+    ) -> PyResult<Vec<SymKeyEncryptedSessionKey>> {
         let (_, symmetric_key_packets, _) =
             top_level_encryption_packets_from_source(&self.source, &self.info.headers)?;
         Ok(symmetric_key_packets)
@@ -579,9 +567,9 @@ impl Message {
     #[pyo3(signature = (key, index=0))]
     fn verify_signature(
         &self,
-        key: PyRef<'_, PublicKey>,
+        key: PyRef<'_, SignedPublicKey>,
         index: usize,
-    ) -> PyResult<hierarchy::SignaturePacket> {
+    ) -> PyResult<hierarchy::Signature> {
         let mut message = prepare_message_for_content(&self.source).map_err(to_py_err)?;
         message.as_data_vec().map_err(to_py_err)?;
 
@@ -627,9 +615,9 @@ impl Message {
     #[pyo3(signature = (key, index=0))]
     fn verify(
         &self,
-        key: PyRef<'_, PublicKey>,
+        key: PyRef<'_, SignedPublicKey>,
         index: usize,
-    ) -> PyResult<hierarchy::SignaturePacket> {
+    ) -> PyResult<hierarchy::Signature> {
         self.verify_signature(key, index)
     }
 
@@ -642,7 +630,7 @@ impl Message {
         &self,
         py: Python<'_>,
         password: Option<&str>,
-        key: PyRef<'_, SecretKey>,
+        key: PyRef<'_, SignedSecretKey>,
     ) -> PyResult<Py<PyAny>> {
         let key_password = password_from_option(password);
         let (message, _) = parse_message(&self.source).map_err(to_py_err)?;
@@ -730,7 +718,7 @@ impl EncryptedMessage {
 ///
 /// The decrypted payload is materialized once so Python code can continue inspecting or verifying
 /// signed content that was revealed by decryption.
-#[pyclass(subclass, module = "openpgp", from_py_object)]
+#[pyclass(subclass, module = "openpgp.composed", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct DecryptedMessage {
     pub(crate) kind: String,
@@ -744,15 +732,15 @@ pub(crate) struct DecryptedMessage {
     pub(crate) signatures: Vec<DecryptedSignature>,
 }
 
-#[pyclass(extends = DecryptedMessage, module = "openpgp", skip_from_py_object)]
+#[pyclass(extends = DecryptedMessage, module = "openpgp.composed", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct DecryptedLiteralMessage;
 
-#[pyclass(extends = DecryptedMessage, module = "openpgp", skip_from_py_object)]
+#[pyclass(extends = DecryptedMessage, module = "openpgp.composed", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct DecryptedCompressedMessage;
 
-#[pyclass(extends = DecryptedMessage, module = "openpgp", skip_from_py_object)]
+#[pyclass(extends = DecryptedMessage, module = "openpgp.composed", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct DecryptedSignedMessage;
 
@@ -813,12 +801,12 @@ impl DecryptedMessage {
     }
 
     /// The decrypted payload bytes after automatic decompression.
-    fn payload_bytes(&self) -> Vec<u8> {
+    fn as_data_vec(&self) -> Vec<u8> {
         self.payload.clone()
     }
 
     /// The decrypted payload as UTF-8 text.
-    fn payload_text(&self) -> PyResult<String> {
+    fn as_data_string(&self) -> PyResult<String> {
         String::from_utf8(self.payload.clone()).map_err(to_py_err)
     }
 
@@ -854,7 +842,7 @@ impl DecryptedMessage {
     }
 
     /// Return signature packets for every signature revealed by decryption.
-    fn signatures(&self) -> Vec<hierarchy::SignaturePacket> {
+    fn signatures(&self) -> Vec<hierarchy::Signature> {
         self.signatures
             .iter()
             .map(|sig| hierarchy::signature_packet_from_raw(&sig.signature))
@@ -868,9 +856,9 @@ impl DecryptedMessage {
     #[pyo3(signature = (key, index=0))]
     fn verify_signature(
         &self,
-        key: PyRef<'_, PublicKey>,
+        key: PyRef<'_, SignedPublicKey>,
         index: usize,
-    ) -> PyResult<hierarchy::SignaturePacket> {
+    ) -> PyResult<hierarchy::Signature> {
         if self.signatures.is_empty() {
             return Err(to_py_err("message was not signed"));
         }
@@ -891,9 +879,9 @@ impl DecryptedMessage {
     #[pyo3(signature = (key, index=0))]
     fn verify(
         &self,
-        key: PyRef<'_, PublicKey>,
+        key: PyRef<'_, SignedPublicKey>,
         index: usize,
-    ) -> PyResult<hierarchy::SignaturePacket> {
+    ) -> PyResult<hierarchy::Signature> {
         self.verify_signature(key, index)
     }
 
@@ -906,7 +894,7 @@ impl DecryptedMessage {
 }
 
 /// A detached OpenPGP signature packet sequence.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.composed", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct DetachedSignature {
     pub(crate) inner: PgpDetachedSignature,
@@ -1058,12 +1046,12 @@ impl DetachedSignature {
     }
 
     #[getter]
-    fn signature(&self) -> hierarchy::SignaturePacket {
+    fn signature(&self) -> hierarchy::Signature {
         hierarchy::signature_packet_from_raw(&self.inner.signature)
     }
 
     /// Verify a detached signature against a public key and payload.
-    fn verify(&self, key: PyRef<'_, PublicKey>, data: &[u8]) -> PyResult<()> {
+    fn verify(&self, key: PyRef<'_, SignedPublicKey>, data: &[u8]) -> PyResult<()> {
         let verifier = select_verifier_for_signature(&key.inner, &self.inner.signature)?;
         verifier.verify_detached(&self.inner, data)
     }
@@ -1071,9 +1059,9 @@ impl DetachedSignature {
     /// Verify a detached signature and return the signature packet.
     fn verify_signature(
         &self,
-        key: PyRef<'_, PublicKey>,
+        key: PyRef<'_, SignedPublicKey>,
         data: &[u8],
-    ) -> PyResult<hierarchy::SignaturePacket> {
+    ) -> PyResult<hierarchy::Signature> {
         self.verify(key, data)?;
         Ok(self.signature())
     }
@@ -1082,7 +1070,7 @@ impl DetachedSignature {
     fn verify_file(
         &self,
         py: Python<'_>,
-        key: PyRef<'_, PublicKey>,
+        key: PyRef<'_, SignedPublicKey>,
         path: PathBuf,
     ) -> PyResult<()> {
         let selected_verifier = select_verifier_for_signature(&key.inner, &self.inner.signature)?;
@@ -1102,9 +1090,9 @@ impl DetachedSignature {
     fn verify_file_signature(
         &self,
         py: Python<'_>,
-        key: PyRef<'_, PublicKey>,
+        key: PyRef<'_, SignedPublicKey>,
         path: PathBuf,
-    ) -> PyResult<hierarchy::SignaturePacket> {
+    ) -> PyResult<hierarchy::Signature> {
         self.verify_file(py, key, path)?;
         Ok(self.signature())
     }
@@ -1112,7 +1100,7 @@ impl DetachedSignature {
     /// Verify a detached text signature against UTF-8 text.
     ///
     /// Text verification normalizes line endings, matching the semantics of text signatures.
-    fn verify_text(&self, key: PyRef<'_, PublicKey>, text: &str) -> PyResult<()> {
+    fn verify_text(&self, key: PyRef<'_, SignedPublicKey>, text: &str) -> PyResult<()> {
         self.verify(key, text.as_bytes())
     }
 
@@ -1121,9 +1109,9 @@ impl DetachedSignature {
     /// Text verification normalizes line endings, matching the semantics of text signatures.
     fn verify_text_signature(
         &self,
-        key: PyRef<'_, PublicKey>,
+        key: PyRef<'_, SignedPublicKey>,
         text: &str,
-    ) -> PyResult<hierarchy::SignaturePacket> {
+    ) -> PyResult<hierarchy::Signature> {
         self.verify_text(key, text)?;
         Ok(self.signature())
     }
@@ -1146,7 +1134,7 @@ impl DetachedSignature {
 }
 
 /// A cleartext signed message, following RFC 9580 section 7.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.composed", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct CleartextSignedMessage {
     pub(crate) inner: PgpCleartextSignedMessage,
@@ -1196,7 +1184,7 @@ impl CleartextSignedMessage {
     }
 
     /// Return signature packets for every cleartext signature.
-    fn signatures(&self) -> Vec<hierarchy::SignaturePacket> {
+    fn signatures(&self) -> Vec<hierarchy::Signature> {
         self.inner
             .signatures()
             .iter()
@@ -1210,9 +1198,9 @@ impl CleartextSignedMessage {
     #[pyo3(signature = (key, index=None))]
     fn verify_signature(
         &self,
-        key: PyRef<'_, PublicKey>,
+        key: PyRef<'_, SignedPublicKey>,
         index: Option<usize>,
-    ) -> PyResult<hierarchy::SignaturePacket> {
+    ) -> PyResult<hierarchy::Signature> {
         let signed_text = self.inner.signed_text();
         let signatures = self.inner.signatures();
 
@@ -1251,9 +1239,9 @@ impl CleartextSignedMessage {
     #[pyo3(signature = (key, index=None))]
     fn verify(
         &self,
-        key: PyRef<'_, PublicKey>,
+        key: PyRef<'_, SignedPublicKey>,
         index: Option<usize>,
-    ) -> PyResult<hierarchy::SignaturePacket> {
+    ) -> PyResult<hierarchy::Signature> {
         self.verify_signature(key, index)
     }
 
@@ -1283,7 +1271,7 @@ mod tests {
     };
     use rand::thread_rng;
 
-    fn generate_signing_subkey_certificate() -> (SignedSecretKey, SignedPublicKey) {
+    fn generate_signing_subkey_certificate() -> (PgpSignedSecretKey, PgpSignedPublicKey) {
         let params = PgpSecretKeyParamsBuilder::default()
             .version(KeyVersion::V6)
             .key_type(PgpKeyType::Ed25519)
@@ -1300,7 +1288,7 @@ mod tests {
             .build()
             .unwrap();
         let secret_key = params.generate(thread_rng()).unwrap();
-        let public_key = SignedPublicKey::from(secret_key.clone());
+        let public_key = PgpSignedPublicKey::from(secret_key.clone());
         (secret_key, public_key)
     }
 

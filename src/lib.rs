@@ -12,8 +12,9 @@ use pgp::{
         EncryptionCaps as PgpEncryptionCaps, FullSignaturePacket, KeyType as PgpKeyType,
         Message as PgpMessage, MessageBuilder, PlainSessionKey as PgpPlainSessionKey,
         RawSessionKey as PgpRawSessionKey, SecretKeyParams as PgpSecretKeyParams,
-        SecretKeyParamsBuilder as PgpSecretKeyParamsBuilder, SignedPublicKey, SignedPublicSubKey,
-        SignedSecretKey, SignedSecretSubKey, SubkeyParams as PgpSubkeyParams,
+        SecretKeyParamsBuilder as PgpSecretKeyParamsBuilder, SignedPublicKey as PgpSignedPublicKey,
+        SignedPublicSubKey as PgpSignedPublicSubKey, SignedSecretKey as PgpSignedSecretKey,
+        SignedSecretSubKey as PgpSignedSecretSubKey, SubkeyParams as PgpSubkeyParams,
         SubkeyParamsBuilder as PgpSubkeyParamsBuilder,
     },
     crypto::{
@@ -59,7 +60,6 @@ fn to_py_err(error: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(error.to_string())
 }
 
-mod api;
 mod builder;
 mod conversions;
 mod hierarchy;
@@ -69,6 +69,7 @@ mod keys;
 mod messages;
 mod packets;
 mod serialization;
+mod util;
 
 #[pymodule]
 pub(crate) fn _openpgp(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -97,24 +98,24 @@ pub(crate) fn _openpgp(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<hierarchy::X448PublicParams>()?;
     module.add_class::<hierarchy::Ed448PublicParams>()?;
     module.add_class::<hierarchy::UnknownPublicParams>()?;
-    module.add_class::<hierarchy::PublicKeyPacket>()?;
-    module.add_class::<hierarchy::PublicSubkeyPacket>()?;
-    module.add_class::<hierarchy::SecretKeyPacket>()?;
-    module.add_class::<hierarchy::SecretSubkeyPacket>()?;
-    module.add_class::<hierarchy::SignaturePacket>()?;
+    module.add_class::<hierarchy::PublicKey>()?;
+    module.add_class::<hierarchy::PublicSubkey>()?;
+    module.add_class::<hierarchy::SecretKey>()?;
+    module.add_class::<hierarchy::SecretSubkey>()?;
+    module.add_class::<hierarchy::Signature>()?;
     module.add_class::<hierarchy::SignedUser>()?;
     module.add_class::<hierarchy::SignedUserAttribute>()?;
     module.add_class::<hierarchy::SignedKeyDetails>()?;
     module.add_class::<hierarchy::SignedPublicSubKey>()?;
     module.add_class::<hierarchy::SignedSecretSubKey>()?;
-    module.add_class::<keys::PublicKey>()?;
-    module.add_class::<keys::SecretKey>()?;
-    module.add_class::<packets::PublicKeyEncryptedSessionKeyPacket>()?;
-    module.add_class::<packets::SymKeyEncryptedSessionKeyPacket>()?;
+    module.add_class::<keys::SignedPublicKey>()?;
+    module.add_class::<keys::SignedSecretKey>()?;
+    module.add_class::<packets::PublicKeyEncryptedSessionKey>()?;
+    module.add_class::<packets::SymKeyEncryptedSessionKey>()?;
     module.add_class::<packets::EncryptedDataPacket>()?;
-    module.add_class::<packets::SymEncryptedDataPacket>()?;
-    module.add_class::<packets::SymEncryptedProtectedDataPacket>()?;
-    module.add_class::<packets::GnupgAeadDataPacket>()?;
+    module.add_class::<packets::SymEncryptedData>()?;
+    module.add_class::<packets::SymEncryptedProtectedData>()?;
+    module.add_class::<packets::GnupgAeadData>()?;
     module.add_class::<messages::Message>()?;
     module.add_class::<messages::DecryptedMessage>()?;
     module.add_class::<messages::LiteralDataHeader>()?;
@@ -132,7 +133,6 @@ pub(crate) fn _openpgp(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<info::RevocationKey>()?;
     module.add_class::<messages::DetachedSignature>()?;
     module.add_class::<messages::CleartextSignedMessage>()?;
-    module.add_class::<info::MessageInfo>()?;
-    api::register(module)?;
+    util::register(module)?;
     Ok(())
 }

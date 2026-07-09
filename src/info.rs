@@ -8,17 +8,17 @@ pub(crate) fn parse_message(
     PgpMessage::from_reader(Cursor::new(source))
 }
 
-pub(crate) fn inspect_message_from_source(
+pub(crate) fn message_summary_from_source(
     source: &[u8],
-) -> Result<MessageInfo, pgp::errors::Error> {
+) -> Result<MessageSummary, pgp::errors::Error> {
     let (message, headers) = parse_message(source)?;
-    Ok(message_info_from_parts(message, headers))
+    Ok(message_summary_from_parts(message, headers))
 }
 
-pub(crate) fn message_info_from_ref(
+pub(crate) fn message_summary_from_ref(
     message: &PgpMessage<'_>,
     headers: Option<Headers>,
-) -> MessageInfo {
+) -> MessageSummary {
     let (kind, is_nested) = match message {
         PgpMessage::Literal { is_nested, .. } => ("literal", *is_nested),
         PgpMessage::Compressed { is_nested, .. } => ("compressed", *is_nested),
@@ -26,25 +26,18 @@ pub(crate) fn message_info_from_ref(
         PgpMessage::Encrypted { is_nested, .. } => ("encrypted", *is_nested),
     };
 
-    MessageInfo {
+    MessageSummary {
         kind: kind.to_string(),
         is_nested,
         headers,
     }
 }
 
-pub(crate) fn message_info_from_parts(
+pub(crate) fn message_summary_from_parts(
     message: PgpMessage<'_>,
     headers: Option<Headers>,
-) -> MessageInfo {
-    message_info_from_ref(&message, headers)
-}
-
-pub(crate) fn parse_message_info_from_reader(
-    reader: Cursor<&[u8]>,
-) -> Result<MessageInfo, pgp::errors::Error> {
-    let (message, headers) = PgpMessage::from_reader(reader)?;
-    Ok(message_info_from_parts(message, headers))
+) -> MessageSummary {
+    message_summary_from_ref(&message, headers)
 }
 
 pub(crate) fn prepare_message_for_content(
@@ -519,7 +512,7 @@ pub(crate) fn decrypted_signature_from_full_signature(
 }
 
 /// Decoded RFC 9580 key-flags subpacket metadata.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.packet", from_py_object)]
 #[derive(Clone, Copy)]
 pub(crate) struct KeyFlags {
     pub(crate) certify: bool,
@@ -608,7 +601,7 @@ impl KeyFlags {
     }
 }
 
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.packet", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct UserAttribute {
     pub(crate) inner: PgpUserAttribute,
@@ -657,7 +650,7 @@ impl UserAttribute {
 }
 
 /// Decoded RFC 9580 Features subpacket metadata.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.packet", from_py_object)]
 #[derive(Clone, Copy)]
 pub(crate) struct Features {
     pub(crate) seipd_v1: bool,
@@ -687,7 +680,7 @@ impl Features {
 }
 
 /// Structured `KeyDetails.public_params()` metadata for a key packet.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.types", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PublicParamsInfo {
     pub(crate) kind: String,
@@ -787,7 +780,7 @@ impl PublicParamsInfo {
 }
 
 /// Decoded RFC 9580 signature-notation metadata.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.packet", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct Notation {
     pub(crate) human_readable: bool,
@@ -828,7 +821,7 @@ impl Notation {
 /// Decoded designated-revocation-key metadata from a signature.
 ///
 /// This reflects the deprecated RFC 9580 revocation-key subpacket, when present.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.packet", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct RevocationKey {
     pub(crate) class_id: u8,
@@ -873,39 +866,9 @@ impl RevocationKey {
     }
 }
 
-/// Lightweight metadata about an OpenPGP message.
-#[pyclass(module = "openpgp", from_py_object)]
 #[derive(Clone)]
-pub(crate) struct MessageInfo {
+pub(crate) struct MessageSummary {
     pub(crate) kind: String,
     pub(crate) is_nested: bool,
     pub(crate) headers: Option<Headers>,
-}
-
-#[pymethods]
-impl MessageInfo {
-    /// The top-level message kind: literal, compressed, signed, or encrypted.
-    #[getter]
-    fn kind(&self) -> String {
-        self.kind.clone()
-    }
-
-    /// Whether this message was nested inside another message layer.
-    #[getter]
-    fn is_nested(&self) -> bool {
-        self.is_nested
-    }
-
-    /// ASCII-armor headers if the message was parsed from armor.
-    #[getter]
-    fn headers(&self) -> Option<Headers> {
-        self.headers.clone()
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "MessageInfo(kind='{}', is_nested={})",
-            self.kind, self.is_nested
-        )
-    }
 }

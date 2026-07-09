@@ -36,7 +36,11 @@ use crate::{
     to_py_err,
 };
 
-#[pyclass(module = "openpgp", name = "ArmorOptions", skip_from_py_object)]
+#[pyclass(
+    module = "openpgp.composed",
+    name = "ArmorOptions",
+    skip_from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PyArmorOptions {
     pub(crate) headers: Option<Headers>,
@@ -815,7 +819,7 @@ fn build_armored_message(
     }
 }
 
-#[pyclass(module = "openpgp", name = "MessageBuilder")]
+#[pyclass(module = "openpgp.composed", name = "MessageBuilder")]
 pub(crate) struct PyMessageBuilder {
     state: Option<MessageBuilderConfig>,
 }

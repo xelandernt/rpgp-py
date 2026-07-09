@@ -29,11 +29,6 @@ class CompressionAlgorithm(str, Enum):
     Bzip2 = "bzip2"
 
 
-class PacketHeaderVersionName(str, Enum):
-    Old = "old"
-    New = "new"
-
-
 __all__ = [
     "CompressionAlgorithm",
     "DsaPublicKey",
@@ -45,7 +40,6 @@ __all__ = [
     "EdDsaLegacyPublicParams",
     "ElgamalPublicParams",
     "PacketHeaderVersion",
-    "PacketHeaderVersionName",
     "PublicParams",
     "RsaPublicKey",
     "RsaPublicParams",

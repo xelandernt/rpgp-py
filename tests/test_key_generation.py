@@ -10,11 +10,11 @@ from openpgp.composed import (
     Message,
     MessageBuilder,
     SecretKeyParamsBuilder,
-    SignedPublicKey as PublicKey,
-    SignedSecretKey as SecretKey,
+    SignedPublicKey,
+    SignedSecretKey,
     SubkeyParamsBuilder,
 )
-from openpgp.packet import Signature as SignaturePacket
+from openpgp.packet import Signature
 from openpgp.packet import UserAttribute
 from openpgp.types import PacketHeaderVersion, S2kParams, StringToKey
 
@@ -177,12 +177,12 @@ def test_generate_ed25519_x25519_key_roundtrips(version: KeyVersion) -> None:
     secret_key.verify_bindings()
     public_key.verify_bindings()
 
-    reparsed_secret, headers = SecretKey.from_armor(secret_key.to_armored())
+    reparsed_secret, headers = SignedSecretKey.from_armor(secret_key.to_armored())
     assert headers == {}
     reparsed_secret.verify_bindings()
     assert reparsed_secret.fingerprint == secret_key.fingerprint
 
-    reparsed_public, headers = PublicKey.from_armor(public_key.to_armored())
+    reparsed_public, headers = SignedPublicKey.from_armor(public_key.to_armored())
     assert headers == {}
     reparsed_public.verify_bindings()
     assert reparsed_public.fingerprint == public_key.fingerprint
@@ -190,12 +190,12 @@ def test_generate_ed25519_x25519_key_roundtrips(version: KeyVersion) -> None:
     signed = _sign_message(b"generated payload", reparsed_secret)
     signed_message, _ = Message.from_armor(signed)
     signed_message.verify(reparsed_public)
-    assert signed_message.payload_bytes() == b"generated payload"
+    assert signed_message.as_data_vec() == b"generated payload"
 
     encrypted = _encrypt_message_to_recipient(b"hello world", reparsed_public)
     encrypted_message, _ = Message.from_armor(encrypted)
     decrypted = encrypted_message.decrypt(None, reparsed_secret)
-    assert decrypted.payload_bytes() == b"hello world"
+    assert decrypted.as_data_vec() == b"hello world"
 
 
 def test_generate_legacy_curve25519_key_matches_docs_example() -> None:
@@ -228,7 +228,7 @@ def test_generate_legacy_curve25519_key_matches_docs_example() -> None:
     encrypted = _encrypt_message_to_recipient(b"Hello World", public_key)
     encrypted_message, _ = Message.from_armor(encrypted)
     decrypted = encrypted_message.decrypt(None, secret_key)
-    assert decrypted.payload_bytes() == b"Hello World"
+    assert decrypted.as_data_vec() == b"Hello World"
 
 
 @pytest.mark.parametrize("version", [4, 6])
@@ -274,8 +274,8 @@ def test_generated_key_details_expose_version_algorithm_and_creation_time(
     assert secret_binding.key.public_key_algorithm == "x25519"
     assert public_binding.key.public_key_algorithm == "x25519"
 
-    reparsed_secret, _ = SecretKey.from_armor(secret_key.to_armored())
-    reparsed_public, _ = PublicKey.from_armor(public_key.to_armored())
+    reparsed_secret, _ = SignedSecretKey.from_armor(secret_key.to_armored())
+    reparsed_public, _ = SignedPublicKey.from_armor(public_key.to_armored())
 
     assert reparsed_secret.version == version
     assert reparsed_public.version == version
@@ -342,8 +342,8 @@ def test_generated_ecdsa_and_ecdh_public_params_expose_curve_metadata(
         assert params.kdf_hash_algorithm == "sha256"
         assert params.kdf_symmetric_algorithm == "aes128"
 
-    reparsed_secret, _ = SecretKey.from_armor(secret_key.to_armored())
-    reparsed_public, _ = PublicKey.from_armor(public_key.to_armored())
+    reparsed_secret, _ = SignedSecretKey.from_armor(secret_key.to_armored())
+    reparsed_public, _ = SignedPublicKey.from_armor(public_key.to_armored())
 
     assert reparsed_secret.public_params.curve == "p256"
     assert reparsed_public.public_params.curve == "p256"
@@ -394,8 +394,8 @@ def test_legacy_curve25519_public_params_expose_curve_metadata() -> None:
         assert params.kdf_symmetric_algorithm == "aes128"
         assert params.kdf_type is not None
 
-    reparsed_secret, _ = SecretKey.from_armor(secret_key.to_armored())
-    reparsed_public, _ = PublicKey.from_armor(public_key.to_armored())
+    reparsed_secret, _ = SignedSecretKey.from_armor(secret_key.to_armored())
+    reparsed_public, _ = SignedPublicKey.from_armor(public_key.to_armored())
 
     assert reparsed_secret.public_params.curve == "ed25519"
     assert reparsed_public.public_params.curve == "ed25519"
@@ -425,8 +425,8 @@ def test_dsa_public_params_expose_prime_size_for_generated_and_parsed_keys() -> 
         assert params.curve_bits is None
         assert params.secret_key_length is None
 
-    reparsed_secret, _ = SecretKey.from_armor(secret_key.to_armored())
-    reparsed_public, _ = PublicKey.from_armor(public_key.to_armored())
+    reparsed_secret, _ = SignedSecretKey.from_armor(secret_key.to_armored())
+    reparsed_public, _ = SignedPublicKey.from_armor(public_key.to_armored())
     assert reparsed_secret.public_params.dsa_bits == 1024
     assert reparsed_public.public_params.dsa_bits == 1024
 
@@ -453,12 +453,12 @@ def test_rsa_public_params_expose_modulus_size_for_generated_and_parsed_keys() -
         assert params.curve_bits is None
         assert params.secret_key_length is None
 
-    reparsed_secret, _ = SecretKey.from_armor(secret_key.to_armored())
-    reparsed_public, _ = PublicKey.from_armor(public_key.to_armored())
+    reparsed_secret, _ = SignedSecretKey.from_armor(secret_key.to_armored())
+    reparsed_public, _ = SignedPublicKey.from_armor(public_key.to_armored())
     assert reparsed_secret.public_params.rsa_bits == 2048
     assert reparsed_public.public_params.rsa_bits == 2048
 
-    fixture_public_key, _ = PublicKey.from_armor(
+    fixture_public_key, _ = SignedPublicKey.from_armor(
         read_fixture_text("rsa-rsa-sample-1.asc")
     )
     assert fixture_public_key.public_params.rsa_bits == 2048
@@ -551,7 +551,7 @@ def test_generate_passphrase_protected_key_requires_password_for_signing() -> No
     )
     public_key = protected_key.to_public_key()
 
-    reparsed_secret, _ = SecretKey.from_armor(protected_key.to_armored())
+    reparsed_secret, _ = SignedSecretKey.from_armor(protected_key.to_armored())
 
     with pytest.raises(ValueError):
         _sign_message(b"payload", reparsed_secret)
@@ -559,12 +559,12 @@ def test_generate_passphrase_protected_key_requires_password_for_signing() -> No
     armored = _sign_message(b"payload", reparsed_secret, password="hello")
     message, _ = Message.from_armor(armored)
     message.verify(public_key)
-    assert message.payload_bytes() == b"payload"
+    assert message.as_data_vec() == b"payload"
 
     encrypted = _encrypt_message_to_recipient(b"secret", public_key)
     encrypted_message, _ = Message.from_armor(encrypted)
     assert (
-        encrypted_message.decrypt("hello", reparsed_secret).payload_bytes() == b"secret"
+        encrypted_message.decrypt("hello", reparsed_secret).as_data_vec() == b"secret"
     )
 
 
@@ -769,8 +769,8 @@ def test_signing_capable_subkey_bindings_expose_embedded_primary_key_binding() -
     assert secret_embedded.typ() == "primary-key-binding"
     assert public_embedded.typ() == "primary-key-binding"
 
-    reparsed_secret, _ = SecretKey.from_armor(secret_key.to_armored())
-    reparsed_public, _ = PublicKey.from_armor(public_key.to_armored())
+    reparsed_secret, _ = SignedSecretKey.from_armor(secret_key.to_armored())
+    reparsed_public, _ = SignedPublicKey.from_armor(public_key.to_armored())
     assert (
         reparsed_secret.secret_subkeys[0].signatures[0].embedded_signature() is not None
     )
@@ -818,7 +818,7 @@ def build_certificate_metadata_key(
     primary_user_id: str | None,
     feature_seipd_v1: bool = True,
     feature_seipd_v2: bool = False,
-) -> SecretKey:
+) -> SignedSecretKey:
     """Adapt upstream certificate-metadata builder coverage into reusable helpers."""
     builder = (
         SecretKeyParamsBuilder()
@@ -845,7 +845,7 @@ def build_certificate_metadata_key(
 
 
 def assert_certificate_preferences_are_exposed_on_signature(
-    info: SignaturePacket,
+    info: Signature,
     *,
     has_features: bool,
     seipd_v1: bool,
@@ -1030,8 +1030,8 @@ def test_user_attribute_image_packets_roundtrip_from_builder() -> None:
     assert secret_attribute.signatures[0].typ() == "cert-positive"
     assert public_attribute.signatures[0].typ() == "cert-positive"
 
-    reparsed_secret, _ = SecretKey.from_armor(secret_key.to_armored())
-    reparsed_public, _ = PublicKey.from_armor(public_key.to_armored())
+    reparsed_secret, _ = SignedSecretKey.from_armor(secret_key.to_armored())
+    reparsed_public, _ = SignedPublicKey.from_armor(public_key.to_armored())
     assert (
         reparsed_secret.details.user_attributes[0].user_attribute.data
         == JPEG_USER_ATTRIBUTE_DATA
@@ -1116,7 +1116,7 @@ def test_generate_passphrase_protected_key_supports_explicit_v4_cfb_s2k() -> Non
     )
     public_key = protected_key.to_public_key()
 
-    reparsed_secret, _ = SecretKey.from_armor(protected_key.to_armored())
+    reparsed_secret, _ = SignedSecretKey.from_armor(protected_key.to_armored())
 
     primary_protection = reparsed_secret.primary_secret_s2k()
     assert primary_protection is not None
@@ -1157,12 +1157,12 @@ def test_generate_passphrase_protected_key_supports_explicit_v4_cfb_s2k() -> Non
     armored = _sign_message(b"payload", reparsed_secret, password="hello")
     message, _ = Message.from_armor(armored)
     message.verify(public_key)
-    assert message.payload_bytes() == b"payload"
+    assert message.as_data_vec() == b"payload"
 
     encrypted = _encrypt_message_to_recipient(b"secret", public_key)
     encrypted_message, _ = Message.from_armor(encrypted)
     assert (
-        encrypted_message.decrypt("hello", reparsed_secret).payload_bytes() == b"secret"
+        encrypted_message.decrypt("hello", reparsed_secret).as_data_vec() == b"secret"
     )
 
 
@@ -1209,7 +1209,7 @@ def test_generate_passphrase_protected_key_supports_explicit_v6_aead_s2k() -> No
     )
     public_key = protected_key.to_public_key()
 
-    reparsed_secret, _ = SecretKey.from_armor(protected_key.to_armored())
+    reparsed_secret, _ = SignedSecretKey.from_armor(protected_key.to_armored())
 
     primary_protection = reparsed_secret.primary_secret_s2k()
     assert primary_protection is not None
@@ -1254,12 +1254,12 @@ def test_generate_passphrase_protected_key_supports_explicit_v6_aead_s2k() -> No
     armored = _sign_message(b"payload", reparsed_secret, password="hello")
     message, _ = Message.from_armor(armored)
     message.verify(public_key)
-    assert message.payload_bytes() == b"payload"
+    assert message.as_data_vec() == b"payload"
 
     encrypted = _encrypt_message_to_recipient(b"secret", public_key)
     encrypted_message, _ = Message.from_armor(encrypted)
     assert (
-        encrypted_message.decrypt("hello", reparsed_secret).payload_bytes() == b"secret"
+        encrypted_message.decrypt("hello", reparsed_secret).as_data_vec() == b"secret"
     )
 
 
@@ -1323,8 +1323,8 @@ def test_packet_version_roundtrips_through_secret_and_public_serialization(
         .generate()
     )
 
-    reparsed_secret = SecretKey.from_bytes(secret_key.to_bytes())
-    reparsed_public = PublicKey.from_bytes(secret_key.to_public_key().to_bytes())
+    reparsed_secret = SignedSecretKey.from_bytes(secret_key.to_bytes())
+    reparsed_public = SignedPublicKey.from_bytes(secret_key.to_public_key().to_bytes())
 
     assert [
         header.version
@@ -1403,8 +1403,8 @@ def test_packet_version_is_exposed_on_keys_and_subkey_bindings(
         public_key.public_subkeys[0].key.packet_version.name == expected_subkey_version
     )
 
-    reparsed_secret = SecretKey.from_bytes(secret_key.to_bytes())
-    reparsed_public = PublicKey.from_bytes(public_key.to_bytes())
+    reparsed_secret = SignedSecretKey.from_bytes(secret_key.to_bytes())
+    reparsed_public = SignedPublicKey.from_bytes(public_key.to_bytes())
     assert reparsed_secret.packet_version == primary_packet_version
     assert reparsed_public.packet_version == primary_packet_version
     assert reparsed_secret.secret_subkeys[0].key.packet_version == subkey_packet_version

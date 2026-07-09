@@ -12,9 +12,8 @@ use pgp::{
         SignedSecretSubKey as PgpSignedSecretSubKey,
     },
     packet::{
-        PublicKey as PgpPublicKeyPacket, PublicSubkey as PgpPublicSubkeyPacket,
-        SecretKey as PgpSecretKeyPacket, SecretSubkey as PgpSecretSubkeyPacket,
-        Signature as PgpSignature,
+        PublicKey as PgpPublicKey, PublicSubkey as PgpPublicSubkey, SecretKey as PgpSecretKey,
+        SecretSubkey as PgpSecretSubkey, Signature as PgpSignature,
     },
     types::{
         EcdhPublicParams as PgpEcdhPublicParams, EcdsaPublicParams as PgpEcdsaPublicParams,
@@ -26,7 +25,7 @@ use pgp::{
 use pyo3::{PyClass, prelude::PyRef, types::PyAny};
 use rsa::traits::PublicKeyParts;
 
-#[pyclass(subclass, module = "openpgp", skip_from_py_object)]
+#[pyclass(subclass, module = "openpgp.types", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PublicParams {
     pub(crate) inner: PgpPublicParams,
@@ -35,7 +34,7 @@ pub(crate) struct PublicParams {
 
 macro_rules! public_params_variant {
     ($name:ident) => {
-        #[pyclass(extends = PublicParams, module = "openpgp", skip_from_py_object)]
+        #[pyclass(extends = PublicParams, module = "openpgp.types", skip_from_py_object)]
         #[derive(Clone)]
         pub(crate) struct $name;
     };
@@ -53,7 +52,7 @@ public_params_variant!(X448PublicParams);
 public_params_variant!(Ed448PublicParams);
 public_params_variant!(UnknownPublicParams);
 
-#[pyclass(module = "openpgp", skip_from_py_object)]
+#[pyclass(module = "openpgp.types", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct RsaPublicKey {
     n: Vec<u8>,
@@ -81,7 +80,7 @@ impl RsaPublicKey {
     }
 }
 
-#[pyclass(module = "openpgp", skip_from_py_object)]
+#[pyclass(module = "openpgp.types", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct DsaPublicKey {
     p: Vec<u8>,
@@ -552,28 +551,28 @@ fn key_packet_data_from_details(
     }
 }
 
-#[pyclass(module = "openpgp", skip_from_py_object)]
+#[pyclass(module = "openpgp.packet", skip_from_py_object)]
 #[derive(Clone)]
-pub(crate) struct PublicKeyPacket {
+pub(crate) struct PublicKey {
     data: KeyPacketData,
 }
 
-#[pyclass(module = "openpgp", skip_from_py_object)]
+#[pyclass(module = "openpgp.packet", skip_from_py_object)]
 #[derive(Clone)]
-pub(crate) struct PublicSubkeyPacket {
+pub(crate) struct PublicSubkey {
     data: KeyPacketData,
 }
 
-#[pyclass(module = "openpgp", skip_from_py_object)]
+#[pyclass(module = "openpgp.packet", skip_from_py_object)]
 #[derive(Clone)]
-pub(crate) struct SecretKeyPacket {
+pub(crate) struct SecretKey {
     data: KeyPacketData,
     secret_s2k: PyS2kParams,
 }
 
-#[pyclass(module = "openpgp", skip_from_py_object)]
+#[pyclass(module = "openpgp.packet", skip_from_py_object)]
 #[derive(Clone)]
-pub(crate) struct SecretSubkeyPacket {
+pub(crate) struct SecretSubkey {
     data: KeyPacketData,
     secret_s2k: PyS2kParams,
 }
@@ -685,18 +684,18 @@ macro_rules! secret_key_packet_methods {
     };
 }
 
-key_packet_methods!(PublicKeyPacket, "PublicKeyPacket");
-key_packet_methods!(PublicSubkeyPacket, "PublicSubkeyPacket");
-secret_key_packet_methods!(SecretKeyPacket, "SecretKeyPacket");
-secret_key_packet_methods!(SecretSubkeyPacket, "SecretSubkeyPacket");
+key_packet_methods!(PublicKey, "PublicKey");
+key_packet_methods!(PublicSubkey, "PublicSubkey");
+secret_key_packet_methods!(SecretKey, "SecretKey");
+secret_key_packet_methods!(SecretSubkey, "SecretSubkey");
 
 pub(crate) fn public_key_packet_object(
     py: Python<'_>,
-    key: &PgpPublicKeyPacket,
-) -> PyResult<Py<PublicKeyPacket>> {
+    key: &PgpPublicKey,
+) -> PyResult<Py<PublicKey>> {
     Py::new(
         py,
-        PublicKeyPacket {
+        PublicKey {
             data: key_packet_data_from_details(key, key.packet_header_version()),
         },
     )
@@ -704,11 +703,11 @@ pub(crate) fn public_key_packet_object(
 
 pub(crate) fn public_subkey_packet_object(
     py: Python<'_>,
-    key: &PgpPublicSubkeyPacket,
-) -> PyResult<Py<PublicSubkeyPacket>> {
+    key: &PgpPublicSubkey,
+) -> PyResult<Py<PublicSubkey>> {
     Py::new(
         py,
-        PublicSubkeyPacket {
+        PublicSubkey {
             data: key_packet_data_from_details(key, key.packet_header_version()),
         },
     )
@@ -716,11 +715,11 @@ pub(crate) fn public_subkey_packet_object(
 
 pub(crate) fn secret_key_packet_object(
     py: Python<'_>,
-    key: &PgpSecretKeyPacket,
-) -> PyResult<Py<SecretKeyPacket>> {
+    key: &PgpSecretKey,
+) -> PyResult<Py<SecretKey>> {
     Py::new(
         py,
-        SecretKeyPacket {
+        SecretKey {
             data: key_packet_data_from_details(key, key.packet_header_version()),
             secret_s2k: s2k_params_from_secret_params(key.secret_params()),
         },
@@ -729,25 +728,25 @@ pub(crate) fn secret_key_packet_object(
 
 pub(crate) fn secret_subkey_packet_object(
     py: Python<'_>,
-    key: &PgpSecretSubkeyPacket,
-) -> PyResult<Py<SecretSubkeyPacket>> {
+    key: &PgpSecretSubkey,
+) -> PyResult<Py<SecretSubkey>> {
     Py::new(
         py,
-        SecretSubkeyPacket {
+        SecretSubkey {
             data: key_packet_data_from_details(key, key.packet_header_version()),
             secret_s2k: s2k_params_from_secret_params(key.secret_params()),
         },
     )
 }
 
-#[pyclass(module = "openpgp", skip_from_py_object)]
+#[pyclass(name = "Signature", module = "openpgp.packet", skip_from_py_object)]
 #[derive(Clone)]
-pub(crate) struct SignaturePacket {
+pub(crate) struct Signature {
     inner: PgpSignature,
 }
 
 #[pymethods]
-impl SignaturePacket {
+impl Signature {
     fn version(&self) -> u8 {
         signature_version_number(self.inner.version())
     }
@@ -826,7 +825,7 @@ impl SignaturePacket {
         self.inner.features().map(features_from_features)
     }
 
-    fn embedded_signature(&self) -> Option<SignaturePacket> {
+    fn embedded_signature(&self) -> Option<Signature> {
         self.inner
             .embedded_signature()
             .map(signature_packet_from_raw)
@@ -874,24 +873,24 @@ impl SignaturePacket {
 
     fn __repr__(&self) -> String {
         format!(
-            "SignaturePacket(version={}, type={:?})",
+            "Signature(version={}, type={:?})",
             self.version(),
             self.typ()
         )
     }
 }
 
-pub(crate) fn signature_packet_from_raw(signature: &PgpSignature) -> SignaturePacket {
-    SignaturePacket {
+pub(crate) fn signature_packet_from_raw(signature: &PgpSignature) -> Signature {
+    Signature {
         inner: signature.clone(),
     }
 }
 
-#[pyclass(module = "openpgp", skip_from_py_object)]
+#[pyclass(module = "openpgp.composed", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct SignedUser {
     id: String,
-    signatures: Vec<SignaturePacket>,
+    signatures: Vec<Signature>,
     is_primary: bool,
 }
 
@@ -908,7 +907,7 @@ impl SignedUser {
     }
 
     #[getter]
-    fn signatures(&self) -> Vec<SignaturePacket> {
+    fn signatures(&self) -> Vec<Signature> {
         self.signatures.clone()
     }
 
@@ -938,11 +937,11 @@ fn signed_user_from_raw(user: &PgpSignedUser) -> SignedUser {
     }
 }
 
-#[pyclass(module = "openpgp", skip_from_py_object)]
+#[pyclass(module = "openpgp.composed", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct SignedUserAttribute {
     attr: UserAttribute,
-    signatures: Vec<SignaturePacket>,
+    signatures: Vec<Signature>,
 }
 
 #[pymethods]
@@ -958,7 +957,7 @@ impl SignedUserAttribute {
     }
 
     #[getter]
-    fn signatures(&self) -> Vec<SignaturePacket> {
+    fn signatures(&self) -> Vec<Signature> {
         self.signatures.clone()
     }
 
@@ -984,11 +983,11 @@ fn signed_user_attribute_from_raw(attribute: &PgpSignedUserAttribute) -> SignedU
     }
 }
 
-#[pyclass(module = "openpgp", skip_from_py_object)]
+#[pyclass(module = "openpgp.composed", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct SignedKeyDetails {
-    revocation_signatures: Vec<SignaturePacket>,
-    direct_signatures: Vec<SignaturePacket>,
+    revocation_signatures: Vec<Signature>,
+    direct_signatures: Vec<Signature>,
     users: Vec<SignedUser>,
     user_attributes: Vec<SignedUserAttribute>,
 }
@@ -996,12 +995,12 @@ pub(crate) struct SignedKeyDetails {
 #[pymethods]
 impl SignedKeyDetails {
     #[getter]
-    fn revocation_signatures(&self) -> Vec<SignaturePacket> {
+    fn revocation_signatures(&self) -> Vec<Signature> {
         self.revocation_signatures.clone()
     }
 
     #[getter]
-    fn direct_signatures(&self) -> Vec<SignaturePacket> {
+    fn direct_signatures(&self) -> Vec<Signature> {
         self.direct_signatures.clone()
     }
 
@@ -1045,22 +1044,22 @@ pub(crate) fn signed_key_details_from_raw(details: &PgpSignedKeyDetails) -> Sign
     }
 }
 
-#[pyclass(module = "openpgp")]
+#[pyclass(module = "openpgp.composed")]
 pub(crate) struct SignedPublicSubKey {
     pub(crate) inner: PgpSignedPublicSubKey,
-    key: Py<PublicSubkeyPacket>,
-    signatures: Vec<SignaturePacket>,
+    key: Py<PublicSubkey>,
+    signatures: Vec<Signature>,
 }
 
 #[pymethods]
 impl SignedPublicSubKey {
     #[getter]
-    fn key(&self, py: Python<'_>) -> Py<PublicSubkeyPacket> {
+    fn key(&self, py: Python<'_>) -> Py<PublicSubkey> {
         self.key.clone_ref(py)
     }
 
     #[getter]
-    fn signatures(&self) -> Vec<SignaturePacket> {
+    fn signatures(&self) -> Vec<Signature> {
         self.signatures.clone()
     }
 
@@ -1089,23 +1088,23 @@ pub(crate) fn signed_public_subkey_from_raw(
     })
 }
 
-#[pyclass(module = "openpgp")]
+#[pyclass(module = "openpgp.composed")]
 pub(crate) struct SignedSecretSubKey {
     pub(crate) inner: PgpSignedSecretSubKey,
-    key: Py<SecretSubkeyPacket>,
-    public_key: Py<PublicSubkeyPacket>,
-    signatures: Vec<SignaturePacket>,
+    key: Py<SecretSubkey>,
+    public_key: Py<PublicSubkey>,
+    signatures: Vec<Signature>,
 }
 
 #[pymethods]
 impl SignedSecretSubKey {
     #[getter]
-    fn key(&self, py: Python<'_>) -> Py<SecretSubkeyPacket> {
+    fn key(&self, py: Python<'_>) -> Py<SecretSubkey> {
         self.key.clone_ref(py)
     }
 
     #[getter]
-    fn signatures(&self) -> Vec<SignaturePacket> {
+    fn signatures(&self) -> Vec<Signature> {
         self.signatures.clone()
     }
 

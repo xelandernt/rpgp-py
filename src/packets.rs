@@ -22,14 +22,14 @@ pub(crate) fn skesk_version_number(version: pgp::types::SkeskVersion) -> u8 {
     }
 }
 
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.packet", from_py_object)]
 #[derive(Clone)]
-pub(crate) struct PublicKeyEncryptedSessionKeyPacket {
+pub(crate) struct PublicKeyEncryptedSessionKey {
     pub(crate) inner: PgpPublicKeyEncryptedSessionKey,
 }
 
 #[pymethods]
-impl PublicKeyEncryptedSessionKeyPacket {
+impl PublicKeyEncryptedSessionKey {
     #[getter]
     fn version(&self) -> u8 {
         pkesk_version_number(self.inner.version())
@@ -90,16 +90,16 @@ impl PublicKeyEncryptedSessionKeyPacket {
 
     fn __repr__(&self) -> String {
         format!(
-            "PublicKeyEncryptedSessionKeyPacket(version={}, public_key_algorithm={:?})",
+            "PublicKeyEncryptedSessionKey(version={}, public_key_algorithm={:?})",
             self.version(),
             self.public_key_algorithm()
         )
     }
 }
 
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.packet", from_py_object)]
 #[derive(Clone)]
-pub(crate) struct SymKeyEncryptedSessionKeyPacket {
+pub(crate) struct SymKeyEncryptedSessionKey {
     pub(crate) inner: PgpSymKeyEncryptedSessionKey,
 }
 
@@ -126,7 +126,7 @@ pub(crate) fn skesk_aead_iv(packet: &PgpSymKeyEncryptedSessionKey) -> Option<Vec
 }
 
 #[pymethods]
-impl SymKeyEncryptedSessionKeyPacket {
+impl SymKeyEncryptedSessionKey {
     #[getter]
     fn version(&self) -> u8 {
         skesk_version_number(self.inner.version())
@@ -172,14 +172,14 @@ impl SymKeyEncryptedSessionKeyPacket {
 
     fn __repr__(&self) -> String {
         format!(
-            "SymKeyEncryptedSessionKeyPacket(version={}, symmetric_algorithm={:?})",
+            "SymKeyEncryptedSessionKey(version={}, symmetric_algorithm={:?})",
             self.version(),
             self.symmetric_algorithm()
         )
     }
 }
 
-#[pyclass(subclass, module = "openpgp", from_py_object)]
+#[pyclass(subclass, module = "openpgp.packet", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct EncryptedDataPacket {
     pub(crate) kind: String,
@@ -193,17 +193,17 @@ pub(crate) struct EncryptedDataPacket {
     pub(crate) packet_bytes: Vec<u8>,
 }
 
-#[pyclass(extends = EncryptedDataPacket, module = "openpgp", skip_from_py_object)]
+#[pyclass(extends = EncryptedDataPacket, module = "openpgp.packet", skip_from_py_object)]
 #[derive(Clone)]
-pub(crate) struct SymEncryptedDataPacket;
+pub(crate) struct SymEncryptedData;
 
-#[pyclass(extends = EncryptedDataPacket, module = "openpgp", skip_from_py_object)]
+#[pyclass(extends = EncryptedDataPacket, module = "openpgp.packet", skip_from_py_object)]
 #[derive(Clone)]
-pub(crate) struct SymEncryptedProtectedDataPacket;
+pub(crate) struct SymEncryptedProtectedData;
 
-#[pyclass(extends = EncryptedDataPacket, module = "openpgp", skip_from_py_object)]
+#[pyclass(extends = EncryptedDataPacket, module = "openpgp.packet", skip_from_py_object)]
 #[derive(Clone)]
-pub(crate) struct GnupgAeadDataPacket;
+pub(crate) struct GnupgAeadData;
 
 pub(crate) fn encrypted_data_packet_from_packet(
     packet: PgpPacket,
@@ -292,17 +292,17 @@ pub(crate) fn encrypted_data_packet_object(
     match kind.as_str() {
         "sed" => Ok(Py::new(
             py,
-            PyClassInitializer::from(packet).add_subclass(SymEncryptedDataPacket),
+            PyClassInitializer::from(packet).add_subclass(SymEncryptedData),
         )?
         .into_any()),
         "gnupg-aead" => Ok(Py::new(
             py,
-            PyClassInitializer::from(packet).add_subclass(GnupgAeadDataPacket),
+            PyClassInitializer::from(packet).add_subclass(GnupgAeadData),
         )?
         .into_any()),
         _ => Ok(Py::new(
             py,
-            PyClassInitializer::from(packet).add_subclass(SymEncryptedProtectedDataPacket),
+            PyClassInitializer::from(packet).add_subclass(SymEncryptedProtectedData),
         )?
         .into_any()),
     }
@@ -312,8 +312,8 @@ pub(crate) fn top_level_encryption_packets_from_source(
     source: &[u8],
     headers: &Option<Headers>,
 ) -> PyResult<(
-    Vec<PublicKeyEncryptedSessionKeyPacket>,
-    Vec<SymKeyEncryptedSessionKeyPacket>,
+    Vec<PublicKeyEncryptedSessionKey>,
+    Vec<SymKeyEncryptedSessionKey>,
     EncryptedDataPacket,
 )> {
     let packets = parse_top_level_packets(source, headers)?;
@@ -324,10 +324,10 @@ pub(crate) fn top_level_encryption_packets_from_source(
     for packet in packets {
         match packet {
             PgpPacket::PublicKeyEncryptedSessionKey(packet) => {
-                public_key_packets.push(PublicKeyEncryptedSessionKeyPacket { inner: packet });
+                public_key_packets.push(PublicKeyEncryptedSessionKey { inner: packet });
             }
             PgpPacket::SymKeyEncryptedSessionKey(packet) => {
-                symmetric_key_packets.push(SymKeyEncryptedSessionKeyPacket { inner: packet });
+                symmetric_key_packets.push(SymKeyEncryptedSessionKey { inner: packet });
             }
             PgpPacket::SymEncryptedData(_)
             | PgpPacket::SymEncryptedProtectedData(_)

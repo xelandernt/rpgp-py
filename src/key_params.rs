@@ -9,7 +9,7 @@ use crate::*;
 /// RFC 9580 distinguishes between the legacy "old" header format and the current "new" header
 /// format. rPGP exposes this via `types::PacketHeaderVersion`; the key builders use the selected
 /// value when serializing primary-key and subkey packets.
-#[pyclass(module = "openpgp", name = "PacketHeaderVersion", from_py_object)]
+#[pyclass(module = "openpgp.types", name = "PacketHeaderVersion", from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PyPacketHeaderVersion {
     pub(crate) inner: PgpPacketHeaderVersion,
@@ -55,7 +55,7 @@ impl PyPacketHeaderVersion {
 ///
 /// This mirrors rPGP's `EncryptionCaps` builder enum and RFC 9580 key-flags semantics for the
 /// "encrypt communications" and "encrypt storage" flags.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.composed", from_py_object)]
 #[derive(Clone, Copy)]
 pub(crate) struct EncryptionCaps {
     pub(crate) inner: PgpEncryptionCaps,
@@ -103,7 +103,7 @@ impl EncryptionCaps {
 }
 
 /// An asymmetric algorithm configuration for OpenPGP key generation.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.composed", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct KeyType {
     pub(crate) inner: PgpKeyType,
@@ -188,7 +188,7 @@ impl KeyType {
 }
 
 /// A parsed or constructed RFC 9580 String-to-Key (S2K) specifier.
-#[pyclass(module = "openpgp", name = "StringToKey", from_py_object)]
+#[pyclass(module = "openpgp.types", name = "StringToKey", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyStringToKey {
     pub(crate) inner: PgpStringToKey,
@@ -314,7 +314,7 @@ impl PyStringToKey {
 }
 
 /// Parsed or constructed secret-key protection parameters (RFC 9580 section 3.7.2).
-#[pyclass(module = "openpgp", name = "S2kParams", from_py_object)]
+#[pyclass(module = "openpgp.types", name = "S2kParams", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyS2kParams {
     pub(crate) inner: PgpS2kParams,
@@ -447,7 +447,7 @@ impl PyS2kParams {
 }
 
 /// Built subkey-generation parameters.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.composed", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct SubkeyParams {
     pub(crate) inner: PgpSubkeyParams,
@@ -462,7 +462,7 @@ impl SubkeyParams {
 }
 
 /// Builder for subkey-generation parameters.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.composed", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct SubkeyParamsBuilder {
     pub(crate) inner: PgpSubkeyParamsBuilder,
@@ -553,7 +553,7 @@ impl SubkeyParamsBuilder {
 }
 
 /// Built primary-key generation parameters.
-#[pyclass(module = "openpgp")]
+#[pyclass(module = "openpgp.composed")]
 pub(crate) struct SecretKeyParams {
     pub(crate) inner: Mutex<Option<PgpSecretKeyParams>>,
     pub(crate) packet_versions: KeyPacketVersions,
@@ -561,7 +561,7 @@ pub(crate) struct SecretKeyParams {
 
 #[pymethods]
 impl SecretKeyParams {
-    fn generate(&self) -> PyResult<SecretKey> {
+    fn generate(&self) -> PyResult<SignedSecretKey> {
         let params = self
             .inner
             .lock()
@@ -570,7 +570,7 @@ impl SecretKeyParams {
             .ok_or_else(|| to_py_err("key parameters have already been consumed"))?;
         let inner = params.generate(rand::thread_rng()).map_err(to_py_err)?;
         let inner = apply_generated_key_packet_versions(inner, &self.packet_versions)?;
-        Ok(SecretKey { inner })
+        Ok(SignedSecretKey { inner })
     }
 
     fn __repr__(&self) -> String {
@@ -584,7 +584,7 @@ impl SecretKeyParams {
 }
 
 /// Builder for primary-key generation parameters.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.composed", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct SecretKeyParamsBuilder {
     pub(crate) inner: PgpSecretKeyParamsBuilder,
@@ -774,7 +774,7 @@ impl SecretKeyParamsBuilder {
         })
     }
 
-    fn generate(&self) -> PyResult<SecretKey> {
+    fn generate(&self) -> PyResult<SignedSecretKey> {
         self.build()?.generate()
     }
 

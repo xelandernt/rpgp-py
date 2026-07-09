@@ -1,6 +1,6 @@
 use crate::conversions::*;
 use crate::hierarchy::{
-    PublicKeyPacket, SecretKeyPacket, SignedKeyDetails, SignedPublicSubKey as PySignedPublicSubKey,
+    PublicKey, SecretKey, SignedKeyDetails, SignedPublicSubKey as PySignedPublicSubKey,
     SignedSecretSubKey as PySignedSecretSubKey, public_key_packet_object, public_params_object,
     secret_key_packet_object, signed_key_details_from_raw, signed_public_subkey_from_raw,
     signed_secret_subkey_from_raw,
@@ -17,25 +17,25 @@ use pyo3::{prelude::PyRef, types::PyAny};
 use std::{io::Read, path::PathBuf};
 
 /// A transferable OpenPGP public key (certificate) as defined by RFC 9580.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.composed", from_py_object)]
 #[derive(Clone)]
-pub(crate) struct PublicKey {
-    pub(crate) inner: SignedPublicKey,
+pub(crate) struct SignedPublicKey {
+    pub(crate) inner: PgpSignedPublicKey,
 }
 
 #[pymethods]
-impl PublicKey {
+impl SignedPublicKey {
     /// Parse an ASCII-armored transferable public key.
     #[staticmethod]
     fn from_armor(data: &str) -> PyResult<(Self, Headers)> {
-        let (inner, headers) = SignedPublicKey::from_string(data).map_err(to_py_err)?;
+        let (inner, headers) = PgpSignedPublicKey::from_string(data).map_err(to_py_err)?;
         Ok((Self { inner }, headers))
     }
 
     /// Parse multiple ASCII-armored transferable public keys from one armored input.
     #[staticmethod]
     fn from_armor_many(data: &str) -> PyResult<(Vec<Self>, Headers)> {
-        let (iter, headers) = SignedPublicKey::from_string_many(data).map_err(to_py_err)?;
+        let (iter, headers) = PgpSignedPublicKey::from_string_many(data).map_err(to_py_err)?;
         let keys = iter
             .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
             .collect::<PyResult<Vec<_>>>()?;
@@ -45,14 +45,14 @@ impl PublicKey {
     /// Parse a binary transferable public key.
     #[staticmethod]
     fn from_bytes(data: &[u8]) -> PyResult<Self> {
-        let inner = SignedPublicKey::from_bytes(Cursor::new(data)).map_err(to_py_err)?;
+        let inner = PgpSignedPublicKey::from_bytes(Cursor::new(data)).map_err(to_py_err)?;
         Ok(Self { inner })
     }
 
     /// Parse multiple binary transferable public keys from concatenated packet bytes.
     #[staticmethod]
     fn from_bytes_many(data: &[u8]) -> PyResult<Vec<Self>> {
-        SignedPublicKey::from_bytes_many(Cursor::new(data))
+        PgpSignedPublicKey::from_bytes_many(Cursor::new(data))
             .map_err(to_py_err)?
             .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
             .collect()
@@ -61,14 +61,14 @@ impl PublicKey {
     /// Parse a single binary transferable public key from a file.
     #[staticmethod]
     fn from_file(path: PathBuf) -> PyResult<Self> {
-        let inner = SignedPublicKey::from_file(&path).map_err(to_py_err)?;
+        let inner = PgpSignedPublicKey::from_file(&path).map_err(to_py_err)?;
         Ok(Self { inner })
     }
 
     /// Parse multiple binary transferable public keys from a file of concatenated packet bytes.
     #[staticmethod]
     fn from_file_many(path: PathBuf) -> PyResult<Vec<Self>> {
-        SignedPublicKey::from_file_many(&path)
+        PgpSignedPublicKey::from_file_many(&path)
             .map_err(to_py_err)?
             .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
             .collect()
@@ -77,14 +77,14 @@ impl PublicKey {
     /// Parse a single ASCII-armored transferable public key from a file.
     #[staticmethod]
     fn from_armor_file(path: PathBuf) -> PyResult<(Self, Headers)> {
-        let (inner, headers) = SignedPublicKey::from_armor_file(&path).map_err(to_py_err)?;
+        let (inner, headers) = PgpSignedPublicKey::from_armor_file(&path).map_err(to_py_err)?;
         Ok((Self { inner }, headers))
     }
 
     /// Parse multiple ASCII-armored transferable public keys from one armored file.
     #[staticmethod]
     fn from_armor_file_many(path: PathBuf) -> PyResult<(Vec<Self>, Headers)> {
-        let (iter, headers) = SignedPublicKey::from_armor_file_many(&path).map_err(to_py_err)?;
+        let (iter, headers) = PgpSignedPublicKey::from_armor_file_many(&path).map_err(to_py_err)?;
         let keys = iter
             .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
             .collect::<PyResult<Vec<_>>>()?;
@@ -143,7 +143,7 @@ impl PublicKey {
 
     /// The primary key packet.
     #[getter]
-    fn primary_key(&self, py: Python<'_>) -> PyResult<Py<PublicKeyPacket>> {
+    fn primary_key(&self, py: Python<'_>) -> PyResult<Py<PublicKey>> {
         public_key_packet_object(py, &self.inner.primary_key)
     }
 
@@ -188,7 +188,7 @@ impl PublicKey {
 
     fn __repr__(&self) -> String {
         format!(
-            "PublicKey(fingerprint='{}', key_id='{}')",
+            "SignedPublicKey(fingerprint='{}', key_id='{}')",
             self.fingerprint(),
             self.key_id()
         )
@@ -196,25 +196,25 @@ impl PublicKey {
 }
 
 /// A transferable OpenPGP secret key, including any secret subkeys.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.composed", from_py_object)]
 #[derive(Clone)]
-pub(crate) struct SecretKey {
-    pub(crate) inner: SignedSecretKey,
+pub(crate) struct SignedSecretKey {
+    pub(crate) inner: PgpSignedSecretKey,
 }
 
 #[pymethods]
-impl SecretKey {
+impl SignedSecretKey {
     /// Parse an ASCII-armored transferable secret key.
     #[staticmethod]
     fn from_armor(data: &str) -> PyResult<(Self, Headers)> {
-        let (inner, headers) = SignedSecretKey::from_string(data).map_err(to_py_err)?;
+        let (inner, headers) = PgpSignedSecretKey::from_string(data).map_err(to_py_err)?;
         Ok((Self { inner }, headers))
     }
 
     /// Parse multiple ASCII-armored transferable secret keys from one armored input.
     #[staticmethod]
     fn from_armor_many(data: &str) -> PyResult<(Vec<Self>, Headers)> {
-        let (iter, headers) = SignedSecretKey::from_string_many(data).map_err(to_py_err)?;
+        let (iter, headers) = PgpSignedSecretKey::from_string_many(data).map_err(to_py_err)?;
         let keys = iter
             .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
             .collect::<PyResult<Vec<_>>>()?;
@@ -224,14 +224,14 @@ impl SecretKey {
     /// Parse a binary transferable secret key.
     #[staticmethod]
     fn from_bytes(data: &[u8]) -> PyResult<Self> {
-        let inner = SignedSecretKey::from_bytes(Cursor::new(data)).map_err(to_py_err)?;
+        let inner = PgpSignedSecretKey::from_bytes(Cursor::new(data)).map_err(to_py_err)?;
         Ok(Self { inner })
     }
 
     /// Parse multiple binary transferable secret keys from concatenated packet bytes.
     #[staticmethod]
     fn from_bytes_many(data: &[u8]) -> PyResult<Vec<Self>> {
-        SignedSecretKey::from_bytes_many(Cursor::new(data))
+        PgpSignedSecretKey::from_bytes_many(Cursor::new(data))
             .map_err(to_py_err)?
             .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
             .collect()
@@ -240,14 +240,14 @@ impl SecretKey {
     /// Parse a single binary transferable secret key from a file.
     #[staticmethod]
     fn from_file(path: PathBuf) -> PyResult<Self> {
-        let inner = SignedSecretKey::from_file(&path).map_err(to_py_err)?;
+        let inner = PgpSignedSecretKey::from_file(&path).map_err(to_py_err)?;
         Ok(Self { inner })
     }
 
     /// Parse multiple binary transferable secret keys from a file of concatenated packet bytes.
     #[staticmethod]
     fn from_file_many(path: PathBuf) -> PyResult<Vec<Self>> {
-        SignedSecretKey::from_file_many(&path)
+        PgpSignedSecretKey::from_file_many(&path)
             .map_err(to_py_err)?
             .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
             .collect()
@@ -256,14 +256,14 @@ impl SecretKey {
     /// Parse a single ASCII-armored transferable secret key from a file.
     #[staticmethod]
     fn from_armor_file(path: PathBuf) -> PyResult<(Self, Headers)> {
-        let (inner, headers) = SignedSecretKey::from_armor_file(&path).map_err(to_py_err)?;
+        let (inner, headers) = PgpSignedSecretKey::from_armor_file(&path).map_err(to_py_err)?;
         Ok((Self { inner }, headers))
     }
 
     /// Parse multiple ASCII-armored transferable secret keys from one armored file.
     #[staticmethod]
     fn from_armor_file_many(path: PathBuf) -> PyResult<(Vec<Self>, Headers)> {
-        let (iter, headers) = SignedSecretKey::from_armor_file_many(&path).map_err(to_py_err)?;
+        let (iter, headers) = PgpSignedSecretKey::from_armor_file_many(&path).map_err(to_py_err)?;
         let keys = iter
             .map(|inner| inner.map(|inner| Self { inner }).map_err(to_py_err))
             .collect::<PyResult<Vec<_>>>()?;
@@ -336,7 +336,7 @@ impl SecretKey {
 
     /// The primary secret-key packet.
     #[getter]
-    fn primary_key(&self, py: Python<'_>) -> PyResult<Py<SecretKeyPacket>> {
+    fn primary_key(&self, py: Python<'_>) -> PyResult<Py<SecretKey>> {
         secret_key_packet_object(py, &self.inner.primary_key)
     }
 
@@ -394,8 +394,8 @@ impl SecretKey {
     }
 
     /// Drop the secret key material and return the corresponding public certificate.
-    fn to_public_key(&self) -> PublicKey {
-        PublicKey {
+    fn to_public_key(&self) -> SignedPublicKey {
+        SignedPublicKey {
             inner: self.inner.to_public_key(),
         }
     }
@@ -414,7 +414,7 @@ impl SecretKey {
 
     fn __repr__(&self) -> String {
         format!(
-            "SecretKey(fingerprint='{}', key_id='{}')",
+            "SignedSecretKey(fingerprint='{}', key_id='{}')",
             self.fingerprint(),
             self.key_id()
         )
@@ -423,8 +423,8 @@ impl SecretKey {
 
 #[derive(Clone)]
 pub(crate) enum PublicRecipient {
-    Certificate(SignedPublicKey),
-    Subkey(SignedPublicSubKey),
+    Certificate(PgpSignedPublicKey),
+    Subkey(PgpSignedPublicSubKey),
 }
 
 impl PublicRecipient {
@@ -657,8 +657,8 @@ impl PublicRecipient {
 
 #[derive(Clone)]
 pub(crate) enum SecretSigner {
-    Certificate(SignedSecretKey),
-    Subkey(SignedSecretSubKey),
+    Certificate(PgpSignedSecretKey),
+    Subkey(PgpSignedSecretSubKey),
 }
 
 impl SecretSigner {
@@ -710,14 +710,14 @@ pub(crate) fn public_recipient_from_python(
     recipient: Py<PyAny>,
 ) -> PyResult<PublicRecipient> {
     let recipient = recipient.bind(py);
-    if let Ok(public_key) = recipient.extract::<PyRef<'_, PublicKey>>() {
+    if let Ok(public_key) = recipient.extract::<PyRef<'_, SignedPublicKey>>() {
         return Ok(PublicRecipient::Certificate(public_key.inner.clone()));
     }
     if let Ok(subkey) = recipient.extract::<PyRef<'_, PySignedPublicSubKey>>() {
         return Ok(PublicRecipient::Subkey(subkey.inner.clone()));
     }
     Err(to_py_err(
-        "recipient must be a PublicKey or SignedPublicSubKey",
+        "recipient must be a SignedPublicKey or SignedPublicSubKey",
     ))
 }
 
@@ -740,14 +740,14 @@ pub(crate) fn secret_signer_from_python(
     signer: Py<PyAny>,
 ) -> PyResult<SecretSigner> {
     let signer = signer.bind(py);
-    if let Ok(secret_key) = signer.extract::<PyRef<'_, SecretKey>>() {
+    if let Ok(secret_key) = signer.extract::<PyRef<'_, SignedSecretKey>>() {
         return Ok(SecretSigner::Certificate(secret_key.inner.clone()));
     }
     if let Ok(subkey) = signer.extract::<PyRef<'_, PySignedSecretSubKey>>() {
         return Ok(SecretSigner::Subkey(subkey.inner.clone()));
     }
     Err(to_py_err(
-        "signer must be a SecretKey or SignedSecretSubKey",
+        "signer must be a SignedSecretKey or SignedSecretSubKey",
     ))
 }
 
