@@ -3,7 +3,6 @@ name = "rpgp-py"
 version = "0.20.0"
 edition = "2024"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 name = "_openpgp"
 crate-type = ["cdylib"]
