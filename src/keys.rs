@@ -156,6 +156,28 @@ impl PublicKey {
         revocation_signature_infos_from_details(&self.inner.details)
     }
 
+    /// The key-revocation signatures attached to the certificate, as verifiable signature objects.
+    fn revocation_signatures(&self) -> Vec<PySignature> {
+        self.inner
+            .details
+            .revocation_signatures
+            .iter()
+            .cloned()
+            .map(|inner| PySignature { inner })
+            .collect()
+    }
+
+    /// The direct-key self-signatures attached to the certificate, as verifiable signature objects.
+    fn direct_signatures(&self) -> Vec<PySignature> {
+        self.inner
+            .details
+            .direct_signatures
+            .iter()
+            .cloned()
+            .map(|inner| PySignature { inner })
+            .collect()
+    }
+
     /// Return user IDs together with their certification self-signatures.
     ///
     /// Version-4 certificates carry certificate metadata such as key flags and preferred
@@ -524,6 +546,16 @@ impl PublicSubkey {
             .collect()
     }
 
+    /// The binding and revocation signatures on this subkey, as verifiable signature objects.
+    fn signature_packets(&self) -> Vec<PySignature> {
+        self.inner
+            .signatures
+            .iter()
+            .cloned()
+            .map(|inner| PySignature { inner })
+            .collect()
+    }
+
     fn to_bytes(&self) -> PyResult<Vec<u8>> {
         self.inner.to_bytes().map_err(to_py_err)
     }
@@ -534,6 +566,43 @@ impl PublicSubkey {
             self.fingerprint(),
             self.key_id()
         )
+    }
+}
+
+/// An OpenPGP signature packet with methods to verify it against the signing key material.
+#[pyclass(module = "openpgp", name = "Signature", from_py_object)]
+#[derive(Clone)]
+pub(crate) struct PySignature {
+    pub(crate) inner: Signature,
+}
+
+#[pymethods]
+impl PySignature {
+    /// Verify this direct-key or key-revocation signature against the `signer` primary key.
+    fn verify_key(&self, signer: PyRef<'_, PublicKey>) -> PyResult<()> {
+        self.inner
+            .verify_key(&signer.inner.primary_key)
+            .map_err(to_py_err)
+    }
+
+    /// Verify this subkey binding or revocation, made by `signer` over the `signee` subkey.
+    fn verify_subkey_binding(
+        &self,
+        signer: PyRef<'_, PublicKey>,
+        signee: PyRef<'_, PublicSubkey>,
+    ) -> PyResult<()> {
+        self.inner
+            .verify_subkey_binding(&signer.inner.primary_key, &signee.inner.key)
+            .map_err(to_py_err)
+    }
+
+    /// The parsed metadata for this signature packet.
+    fn info(&self) -> SignatureInfo {
+        signature_info_from_signature(&self.inner, false)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Signature(type={:?})", self.inner.typ())
     }
 }
 

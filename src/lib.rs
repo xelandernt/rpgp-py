@@ -84,6 +84,7 @@ pub(crate) fn _openpgp(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<key_params::SecretKeyParamsBuilder>()?;
     module.add_class::<keys::PublicKey>()?;
     module.add_class::<keys::PublicSubkey>()?;
+    module.add_class::<keys::PySignature>()?;
     module.add_class::<keys::SecretKey>()?;
     module.add_class::<keys::SecretSubkey>()?;
     module.add_class::<packets::PublicKeyEncryptedSessionKeyPacket>()?;
