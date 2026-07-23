@@ -19,8 +19,6 @@ MAX_BUFFER_SIZE: int
 class Error(ValueError):
     code: str
 
-OpenPgpError = Error
-
 FilePath: TypeAlias = Union[str, PathLike[str]]
 Headers: TypeAlias = Dict[str, List[str]]
 SymmetricAlgorithmName: TypeAlias = Union[

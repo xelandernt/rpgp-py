@@ -75,7 +75,6 @@ pub(crate) fn _openpgp(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let error_type = module.py().get_type::<Error>();
     error_type.setattr("code", "BINDING")?;
     module.add("Error", &error_type)?;
-    module.add("OpenPgpError", error_type)?;
     module.add_class::<armor::Pkcs1Type>()?;
     module.add_class::<armor::BlockType>()?;
     module.add_class::<armor::ArmorCrc24Status>()?;
