@@ -640,6 +640,10 @@ impl UserAttribute {
         user_attribute_image_format(&self.inner)
     }
 
+    fn to_bytes(&self) -> PyResult<Vec<u8>> {
+        crate::serialization::serialize_packet_with_header(&self.inner)
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "UserAttribute(kind='{}', data_len={})",

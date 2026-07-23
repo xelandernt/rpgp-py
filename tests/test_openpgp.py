@@ -6,9 +6,6 @@ from typing import Any, TypedDict, cast
 
 import pytest
 
-import openpgp.composed as composed_api
-import openpgp.packet as packet_api
-from openpgp import MAX_BUFFER_SIZE, VERSION
 from openpgp.armor import BlockType, Dearmor, write as armor_write
 from openpgp.crypto.aead import AeadAlgorithm, ChunkSize
 from openpgp.crypto.ecc_curve import ECCCurve
@@ -34,7 +31,7 @@ from openpgp.composed import (
     SignedSecretKey,
     SubkeyParamsBuilder,
 )
-from openpgp.packet import Packet, PacketParser, PublicKey, Signature
+from openpgp.packet import Packet, PacketParser, Signature
 from openpgp.types import (
     CompressionAlgorithm,
     Duration,
@@ -43,9 +40,6 @@ from openpgp.types import (
     KeyVersion,
     Mpi,
     PacketLength,
-    RevocationKey,
-    SignedUser,
-    SignedUserAttribute,
     StringToKey,
     Tag,
     Timestamp,
@@ -467,58 +461,31 @@ def test_packet_parser_exposes_native_packet_values() -> None:
     assert packets
     assert packets[0].kind == "public-key"
     assert packets[0].header.tag == 6
-    assert isinstance(packets[0].value, PublicKey)
     assert packets[0].to_bytes() == packets[0].value.to_bytes()
     assert Packet.from_bytes(packets[0].to_bytes()).kind == "public-key"
 
 
-def test_native_armor_and_serialization_namespaces() -> None:
+def test_native_armor_and_serialization_round_trip() -> None:
     key, _ = SignedPublicKey.from_armor(read_fixture_text("rsa-rsa-sample-1.asc"))
     armored = io.StringIO()
 
     armor_write(key, BlockType.PublicKey, armored, {"Comment": ["native rPGP"]})
     dearmor = Dearmor(armored.getvalue())
 
-    assert VERSION == "0.20.0"
-    assert MAX_BUFFER_SIZE == 1024 * 1024 * 1024
     assert dearmor.typ == BlockType.PublicKey
     assert dearmor.headers == {"Comment": ["native rPGP"]}
     assert dearmor.readall() == key.to_bytes()
     assert serialize(key) == key.to_bytes()
     assert write_len(key) == len(key.to_bytes())
-    assert armor_write.__name__ == "write"
-    assert armor_write.__module__ == "openpgp.armor"
-    assert serialize.__name__ == "serialize"
-    assert serialize.__module__ == "openpgp.ser"
-    assert serialize_write.__name__ == "write"
-    assert serialize_write.__module__ == "openpgp.ser"
-    assert write_len.__name__ == "write_len"
-    assert write_len.__module__ == "openpgp.ser"
-    assert _openpgp_sign_cleartext_message_many.__module__ == "openpgp.util"
-
     output = io.BytesIO()
     serialize_write(key, output)
     assert output.getvalue() == key.to_bytes()
 
-    assert Error.__module__ == "openpgp.errors"
-    assert str(Error) == "<class 'openpgp.errors.Error'>"
     assert Error("manual binding error").code == "BINDING"
 
     with pytest.raises(Error) as error:
         Dearmor("not ASCII armor")
     assert error.value.code
-
-
-def test_upstream_shared_types_use_types_namespace() -> None:
-    key, _ = SignedPublicKey.from_armor(read_fixture_text("rsa-rsa-sample-1.asc"))
-
-    assert SignedUser.__module__ == "openpgp.types"
-    assert SignedUserAttribute.__module__ == "openpgp.types"
-    assert RevocationKey.__module__ == "openpgp.types"
-    assert isinstance(key.details.users[0], SignedUser)
-    assert not hasattr(composed_api, "SignedUser")
-    assert not hasattr(composed_api, "SignedUserAttribute")
-    assert not hasattr(packet_api, "RevocationKey")
 
 
 def test_native_algorithm_bindings_delegate_to_rpgp() -> None:

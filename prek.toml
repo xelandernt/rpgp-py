@@ -14,7 +14,7 @@ hooks = [
   },
   {
     id = "ruff-format",
-    files = "^brave_api|^tests|^examples|^docs"
+    files = "^src|^tests"
   }
 ]
 

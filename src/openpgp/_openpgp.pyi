@@ -18,15 +18,26 @@ MAX_BUFFER_SIZE: int
 
 class Error(ValueError):
     code: str
+
 OpenPgpError = Error
 
 FilePath: TypeAlias = Union[str, PathLike[str]]
 Headers: TypeAlias = Dict[str, List[str]]
 SymmetricAlgorithmName: TypeAlias = Union[
     Literal[
-        "plaintext", "idea", "triple-des", "cast5", "blowfish", "aes128",
-        "aes192", "aes256", "twofish", "camellia128", "camellia192",
-        "camellia256", "private10",
+        "plaintext",
+        "idea",
+        "triple-des",
+        "cast5",
+        "blowfish",
+        "aes128",
+        "aes192",
+        "aes256",
+        "twofish",
+        "camellia128",
+        "camellia192",
+        "camellia256",
+        "private10",
     ],
     SymmetricKeyAlgorithm,
 ]
@@ -40,8 +51,17 @@ CompressionAlgorithmName: TypeAlias = Union[
 EncryptionVersionName: TypeAlias = Literal["seipd-v1", "seipd-v2"]
 HashAlgorithmName: TypeAlias = Union[
     Literal[
-        "none", "md5", "sha1", "ripemd160", "sha224", "sha256", "sha384",
-        "sha512", "sha3-256", "sha3-512", "private10",
+        "none",
+        "md5",
+        "sha1",
+        "ripemd160",
+        "sha224",
+        "sha256",
+        "sha384",
+        "sha512",
+        "sha3-256",
+        "sha3-512",
+        "private10",
     ],
     HashAlgorithm,
 ]
@@ -53,8 +73,15 @@ S2kUsageName: TypeAlias = Literal[
 ]
 CurveName: TypeAlias = Union[
     Literal[
-        "curve25519", "ed25519", "p256", "p384", "p521",
-        "brainpoolp256r1", "brainpoolp384r1", "brainpoolp512r1", "secp256k1",
+        "curve25519",
+        "ed25519",
+        "p256",
+        "p384",
+        "p521",
+        "brainpoolp256r1",
+        "brainpoolp384r1",
+        "brainpoolp512r1",
+        "secp256k1",
     ],
     ECCCurve,
 ]
@@ -74,6 +101,25 @@ KeyVersionNumber: TypeAlias = Literal[4, 6]
 AeadPreference: TypeAlias = Tuple[SymmetricAlgorithmName, AeadAlgorithmName]
 PacketHeaderVersionName: TypeAlias = Literal["old", "new"]
 LiteralDataModeName: TypeAlias = Literal["binary", "utf8"]
+PacketValue: TypeAlias = Union[
+    PublicKey,
+    PublicSubkey,
+    SecretKey,
+    SecretSubkey,
+    Signature,
+    PublicKeyEncryptedSessionKey,
+    SymKeyEncryptedSessionKey,
+    EncryptedDataPacket,
+    UserAttribute,
+    CompressedData,
+    LiteralData,
+    Marker,
+    ModDetectionCode,
+    OnePassSignature,
+    Padding,
+    Trust,
+    UserId,
+]
 PublicKeyAlgorithmName: TypeAlias = Literal[
     "rsa",
     "rsa-encrypt",
@@ -407,7 +453,9 @@ class BlockType:
 
 class ArmorCrc24Status:
     @property
-    def status(self) -> Literal["no-crc24", "checked-ok", "checked-invalid", "unchecked"]: ...
+    def status(
+        self,
+    ) -> Literal["no-crc24", "checked-ok", "checked-invalid", "unchecked"]: ...
     @property
     def crc(self) -> Optional[int]: ...
     @property
@@ -446,7 +494,6 @@ def armor_write(
     headers: Optional[Headers] = None,
     include_checksum: bool = True,
 ) -> None: ...
-
 def serialize(source: object) -> bytes: ...
 def serialize_write_len(source: object) -> int: ...
 def serialize_write(source: object, writer: BinaryIO) -> None: ...
@@ -587,6 +634,7 @@ class UserAttribute:
     def image_header_version(self) -> Optional[int]: ...
     @property
     def image_format(self) -> Optional[str]: ...
+    def to_bytes(self) -> bytes: ...
 
 class SecretKeyParamsBuilder:
     def __init__(self) -> None: ...
@@ -896,7 +944,9 @@ class SignedPublicKey:
     @staticmethod
     def from_armor_file(path: FilePath) -> Tuple[SignedPublicKey, Headers]: ...
     @staticmethod
-    def from_armor_file_many(path: FilePath) -> Tuple[List[SignedPublicKey], Headers]: ...
+    def from_armor_file_many(
+        path: FilePath,
+    ) -> Tuple[List[SignedPublicKey], Headers]: ...
     @property
     def fingerprint(self) -> str: ...
     @property
@@ -941,7 +991,9 @@ class SignedSecretKey:
     @staticmethod
     def from_armor_file(path: FilePath) -> Tuple[SignedSecretKey, Headers]: ...
     @staticmethod
-    def from_armor_file_many(path: FilePath) -> Tuple[List[SignedSecretKey], Headers]: ...
+    def from_armor_file_many(
+        path: FilePath,
+    ) -> Tuple[List[SignedSecretKey], Headers]: ...
     @property
     def fingerprint(self) -> str: ...
     @property
@@ -1096,7 +1148,9 @@ class Trust:
 
 class UserId:
     @staticmethod
-    def from_str(value: str, packet_version: Optional[PacketHeaderVersionName] = None) -> UserId: ...
+    def from_str(
+        value: str, packet_version: Optional[PacketHeaderVersionName] = None
+    ) -> UserId: ...
     @property
     def id(self) -> bytes: ...
     def as_str(self) -> Optional[str]: ...
@@ -1112,7 +1166,7 @@ class Packet:
     @property
     def header(self) -> PacketHeader: ...
     @property
-    def value(self) -> object: ...
+    def value(self) -> PacketValue: ...
     def to_bytes(self) -> bytes: ...
 
 class PacketParser:
@@ -1340,7 +1394,9 @@ class DetachedSignature:
     @staticmethod
     def from_armor_file(path: FilePath) -> Tuple[DetachedSignature, Headers]: ...
     @staticmethod
-    def from_armor_file_many(path: FilePath) -> Tuple[List[DetachedSignature], Headers]: ...
+    def from_armor_file_many(
+        path: FilePath,
+    ) -> Tuple[List[DetachedSignature], Headers]: ...
     @staticmethod
     def sign_binary_data(
         rng: CryptoRng,
@@ -1361,7 +1417,9 @@ class DetachedSignature:
     def signature(self) -> Signature: ...
     def verify(self, key: SignedPublicKey, data: bytes) -> None: ...
     def verify_file(self, key: SignedPublicKey, path: FilePath) -> None: ...
-    def verify_file_signature(self, key: SignedPublicKey, path: FilePath) -> Signature: ...
+    def verify_file_signature(
+        self, key: SignedPublicKey, path: FilePath
+    ) -> Signature: ...
     def verify_signature(self, key: SignedPublicKey, data: bytes) -> Signature: ...
     def verify_text(self, key: SignedPublicKey, text: str) -> None: ...
     def verify_text_signature(self, key: SignedPublicKey, text: str) -> Signature: ...
