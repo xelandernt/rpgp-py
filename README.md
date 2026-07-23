@@ -1,6 +1,7 @@
 # rpgp-py
 
-[![Supported versions](https://img.shields.io/pypi/pyversions/rpgp-py.svg)](https://pypi.org/project/rpgp-py/)
+[![Supported versions](https://img.shields.io/pypi/v/rpgp-py
+)](https://pypi.org/project/rpgp-py/)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/rpgp-py?period=monthly&units=ABBREVIATION&left_color=BLACK&right_color=GREEN&left_text=downloads%2Fmonth)](https://pepy.tech/projects/rpgp-py)
 [![GitHub stars](https://img.shields.io/github/stars/xelandernt/rpgp-py)](https://github.com/xelandernt/rpgp-py/stargazers)
 [![pyrefly](https://img.shields.io/endpoint?url=https://pyrefly.org/badge.json)](https://github.com/facebook/pyrefly)
