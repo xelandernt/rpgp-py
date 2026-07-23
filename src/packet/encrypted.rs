@@ -1,4 +1,5 @@
 use crate::conversions::*;
+use crate::crypto::{PyAeadAlgorithm, PyPublicKeyAlgorithm, PySymmetricKeyAlgorithm};
 use crate::info::*;
 use crate::serialization::*;
 use crate::types::*;
@@ -41,6 +42,15 @@ impl PublicKeyEncryptedSessionKey {
             .algorithm()
             .ok()
             .map(|algorithm| public_key_algorithm_name(algorithm).to_string())
+    }
+
+    /// Return the native rPGP public-key algorithm enum.
+    #[getter]
+    fn algorithm(&self) -> Option<PyPublicKeyAlgorithm> {
+        self.inner
+            .algorithm()
+            .ok()
+            .map(|inner| PyPublicKeyAlgorithm { inner })
     }
 
     #[getter]
@@ -138,8 +148,26 @@ impl SymKeyEncryptedSessionKey {
     }
 
     #[getter]
+    fn symmetric_algorithm_type(&self) -> Option<PySymmetricKeyAlgorithm> {
+        self.inner
+            .sym_algorithm()
+            .map(|inner| PySymmetricKeyAlgorithm { inner })
+    }
+
+    #[getter]
     fn aead_algorithm(&self) -> Option<String> {
         skesk_aead_algorithm(&self.inner)
+    }
+
+    #[getter]
+    fn aead_algorithm_type(&self) -> Option<PyAeadAlgorithm> {
+        match &self.inner {
+            PgpSymKeyEncryptedSessionKey::V5 { aead, .. }
+            | PgpSymKeyEncryptedSessionKey::V6 { aead, .. } => Some(PyAeadAlgorithm {
+                inner: AeadAlgorithm::from(aead),
+            }),
+            _ => None,
+        }
     }
 
     #[getter]
@@ -425,8 +453,26 @@ impl EncryptedDataPacket {
     }
 
     #[getter]
+    fn symmetric_algorithm_type(&self) -> PyResult<Option<PySymmetricKeyAlgorithm>> {
+        self.symmetric_algorithm
+            .as_deref()
+            .map(symmetric_algorithm_from_name)
+            .transpose()
+            .map(|value| value.map(|inner| PySymmetricKeyAlgorithm { inner }))
+    }
+
+    #[getter]
     fn aead_algorithm(&self) -> Option<String> {
         self.aead_algorithm.clone()
+    }
+
+    #[getter]
+    fn aead_algorithm_type(&self) -> PyResult<Option<PyAeadAlgorithm>> {
+        self.aead_algorithm
+            .as_deref()
+            .map(aead_algorithm_from_name)
+            .transpose()
+            .map(|value| value.map(|inner| PyAeadAlgorithm { inner }))
     }
 
     #[getter]

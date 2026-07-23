@@ -1,4 +1,4 @@
-"""rPGP ``pgp::composed`` compatibility namespace."""
+"""Native bindings for the exposed ``pgp::composed`` API."""
 
 from ._openpgp import (
     ArmorOptions,
@@ -23,8 +23,6 @@ from ._openpgp import (
     SignedPublicSubKey,
     SignedSecretKey,
     SignedSecretSubKey,
-    SignedUser,
-    SignedUserAttribute,
     SubkeyParams,
     SubkeyParamsBuilder,
 )
@@ -52,8 +50,6 @@ __all__ = [
     "SignedPublicSubKey",
     "SignedSecretKey",
     "SignedSecretSubKey",
-    "SignedUser",
-    "SignedUserAttribute",
     "SubkeyParams",
     "SubkeyParamsBuilder",
 ]

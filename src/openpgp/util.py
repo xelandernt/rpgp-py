@@ -29,8 +29,3 @@ __all__ = [
     "sign_message",
     "sign_message_many",
 ]
-
-for _name in __all__:
-    globals()[_name].__module__ = __name__
-
-del _name

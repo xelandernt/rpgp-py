@@ -1,50 +1,69 @@
-"""rPGP ``pgp::types`` compatibility namespace."""
-
-from enum import Enum
+"""Native bindings for the exposed ``pgp::types`` API."""
 
 from ._openpgp import (
+    CompressionAlgorithm,
     DsaPublicKey,
     DsaPublicParams,
+    Duration,
     EcdhPublicParams,
     EcdsaPublicParams,
     Ed25519PublicParams,
     Ed448PublicParams,
     EdDsaLegacyPublicParams,
     ElgamalPublicParams,
+    Fingerprint,
+    KeyId,
+    KeyVersion,
+    Mpi,
+    PacketLength,
     PacketHeaderVersion,
     PublicParams,
+    PkeskVersion,
     RsaPublicKey,
     RsaPublicParams,
+    RevocationKey,
     S2kParams,
+    SignedUser,
+    SignedUserAttribute,
+    SkeskVersion,
     StringToKey,
+    Tag,
+    Timestamp,
     UnknownPublicParams,
     X25519PublicParams,
     X448PublicParams,
 )
 
 
-class CompressionAlgorithm(str, Enum):
-    Zip = "zip"
-    Zlib = "zlib"
-    Bzip2 = "bzip2"
-
-
 __all__ = [
     "CompressionAlgorithm",
     "DsaPublicKey",
     "DsaPublicParams",
+    "Duration",
     "EcdhPublicParams",
     "EcdsaPublicParams",
     "Ed25519PublicParams",
     "Ed448PublicParams",
     "EdDsaLegacyPublicParams",
     "ElgamalPublicParams",
+    "Fingerprint",
+    "KeyId",
+    "KeyVersion",
+    "Mpi",
+    "PacketLength",
     "PacketHeaderVersion",
     "PublicParams",
+    "PkeskVersion",
     "RsaPublicKey",
     "RsaPublicParams",
+    "RevocationKey",
     "S2kParams",
+    "SignedUser",
+    "SignedUserAttribute",
+    "SkeskVersion",
     "StringToKey",
+    "Tag",
+    "Timestamp",
     "UnknownPublicParams",
     "X25519PublicParams",
     "X448PublicParams",

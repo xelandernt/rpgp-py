@@ -1,5 +1,6 @@
 use crate::{
     conversions::key_version_number,
+    crypto::PyPublicKeyAlgorithm,
     info::public_key_algorithm_name,
     serialization::s2k_params_from_secret_params,
     types::{PyPacketHeaderVersion, PyS2kParams, public_params::public_params_object},
@@ -23,6 +24,7 @@ struct KeyPacketData {
     version: u8,
     created_at: u32,
     public_key_algorithm: String,
+    algorithm: pgp::crypto::public_key::PublicKeyAlgorithm,
     public_params: PgpPublicParams,
     packet_version: PgpPacketHeaderVersion,
 }
@@ -37,6 +39,7 @@ fn key_packet_data_from_details(
         version: key_version_number(key.version()),
         created_at: key.created_at().as_secs(),
         public_key_algorithm: public_key_algorithm_name(key.algorithm()).to_string(),
+        algorithm: key.algorithm(),
         public_params: key.public_params().clone(),
         packet_version,
     }
@@ -46,12 +49,14 @@ fn key_packet_data_from_details(
 #[derive(Clone)]
 pub(crate) struct PublicKey {
     data: KeyPacketData,
+    pub(crate) inner: PgpPublicKey,
 }
 
 #[pyclass(module = "openpgp.packet", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PublicSubkey {
     data: KeyPacketData,
+    pub(crate) inner: PgpPublicSubkey,
 }
 
 #[pyclass(module = "openpgp.packet", skip_from_py_object)]
@@ -59,6 +64,7 @@ pub(crate) struct PublicSubkey {
 pub(crate) struct SecretKey {
     data: KeyPacketData,
     secret_s2k: PyS2kParams,
+    pub(crate) inner: PgpSecretKey,
 }
 
 #[pyclass(module = "openpgp.packet", skip_from_py_object)]
@@ -66,6 +72,7 @@ pub(crate) struct SecretKey {
 pub(crate) struct SecretSubkey {
     data: KeyPacketData,
     secret_s2k: PyS2kParams,
+    pub(crate) inner: PgpSecretSubkey,
 }
 
 macro_rules! key_packet_methods {
@@ -97,6 +104,14 @@ macro_rules! key_packet_methods {
                 self.data.public_key_algorithm.clone()
             }
 
+            /// Return the native rPGP algorithm enum.
+            #[getter]
+            fn algorithm(&self) -> PyPublicKeyAlgorithm {
+                PyPublicKeyAlgorithm {
+                    inner: self.data.algorithm,
+                }
+            }
+
             #[getter]
             fn public_params(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
                 public_params_object(py, &self.data.public_params)
@@ -107,6 +122,11 @@ macro_rules! key_packet_methods {
                 PyPacketHeaderVersion {
                     inner: self.data.packet_version,
                 }
+            }
+
+            /// Serialize this packet, including its packet header.
+            fn to_bytes(&self) -> PyResult<Vec<u8>> {
+                crate::serialization::serialize_packet_with_header(&self.inner)
             }
 
             fn __repr__(&self) -> String {
@@ -148,6 +168,14 @@ macro_rules! secret_key_packet_methods {
                 self.data.public_key_algorithm.clone()
             }
 
+            /// Return the native rPGP algorithm enum.
+            #[getter]
+            fn algorithm(&self) -> PyPublicKeyAlgorithm {
+                PyPublicKeyAlgorithm {
+                    inner: self.data.algorithm,
+                }
+            }
+
             #[getter]
             fn public_params(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
                 public_params_object(py, &self.data.public_params)
@@ -163,6 +191,11 @@ macro_rules! secret_key_packet_methods {
             #[getter]
             fn secret_s2k(&self) -> PyS2kParams {
                 self.secret_s2k.clone()
+            }
+
+            /// Serialize this packet, including its packet header.
+            fn to_bytes(&self) -> PyResult<Vec<u8>> {
+                crate::serialization::serialize_packet_with_header(&self.inner)
             }
 
             fn __repr__(&self) -> String {
@@ -200,6 +233,7 @@ pub(crate) fn public_key_packet_object(
         py,
         PublicKey {
             data: key_packet_data_from_details(key, key.packet_header_version()),
+            inner: key.clone(),
         },
     )
 }
@@ -212,6 +246,7 @@ pub(crate) fn public_subkey_packet_object(
         py,
         PublicSubkey {
             data: key_packet_data_from_details(key, key.packet_header_version()),
+            inner: key.clone(),
         },
     )
 }
@@ -225,6 +260,7 @@ pub(crate) fn secret_key_packet_object(
         SecretKey {
             data: key_packet_data_from_details(key, key.packet_header_version()),
             secret_s2k: s2k_params_from_secret_params(key.secret_params()),
+            inner: key.clone(),
         },
     )
 }
@@ -238,6 +274,7 @@ pub(crate) fn secret_subkey_packet_object(
         SecretSubkey {
             data: key_packet_data_from_details(key, key.packet_header_version()),
             secret_s2k: s2k_params_from_secret_params(key.secret_params()),
+            inner: key.clone(),
         },
     )
 }

@@ -42,17 +42,17 @@ fn sign_cleartext_with_signers(
 ///
 /// ``hash_algorithm`` controls the digest used for the signature packet.
 #[pyfunction]
-#[pyo3(signature = (data, signer, password=None, file_name="", hash_algorithm="sha256"))]
+#[pyo3(signature = (data, signer, password=None, file_name="", hash_algorithm=NameInput::from_static("sha256")))]
 pub(crate) fn sign_message(
     py: Python<'_>,
     data: &[u8],
     signer: Py<PyAny>,
     password: Option<&str>,
     file_name: &str,
-    hash_algorithm: &str,
+    hash_algorithm: NameInput,
 ) -> PyResult<String> {
     let password = password_from_option(password);
-    let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
+    let hash_algorithm = hash_algorithm_from_name(hash_algorithm.as_ref())?;
     let signer = secret_signer_from_python(py, signer)?;
     sign_message_with_signers(data, &[signer], vec![password], file_name, hash_algorithm)
 }
@@ -62,16 +62,16 @@ pub(crate) fn sign_message(
 /// ``signers`` must contain at least one secret key. When ``passwords`` is provided, it must have
 /// the same length as ``signers`` and each entry unlocks the corresponding key.
 #[pyfunction]
-#[pyo3(signature = (data, signers, passwords=None, file_name="", hash_algorithm="sha256"))]
+#[pyo3(signature = (data, signers, passwords=None, file_name="", hash_algorithm=NameInput::from_static("sha256")))]
 pub(crate) fn sign_message_many(
     py: Python<'_>,
     data: &[u8],
     signers: Vec<Py<PyAny>>,
     passwords: Option<Vec<Option<String>>>,
     file_name: &str,
-    hash_algorithm: &str,
+    hash_algorithm: NameInput,
 ) -> PyResult<String> {
-    let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
+    let hash_algorithm = hash_algorithm_from_name(hash_algorithm.as_ref())?;
     let (signers, passwords) = signer_entries_from_python(py, signers, passwords)?;
     sign_message_with_signers(data, &signers, passwords, file_name, hash_algorithm)
 }
@@ -80,16 +80,16 @@ pub(crate) fn sign_message_many(
 ///
 /// ``hash_algorithm`` controls the digest used for every signature packet.
 #[pyfunction]
-#[pyo3(signature = (text, signer, password=None, hash_algorithm="sha256"))]
+#[pyo3(signature = (text, signer, password=None, hash_algorithm=NameInput::from_static("sha256")))]
 pub(crate) fn sign_cleartext_message(
     py: Python<'_>,
     text: &str,
     signer: Py<PyAny>,
     password: Option<&str>,
-    hash_algorithm: &str,
+    hash_algorithm: NameInput,
 ) -> PyResult<String> {
     let password = password_from_option(password);
-    let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
+    let hash_algorithm = hash_algorithm_from_name(hash_algorithm.as_ref())?;
     let signer = secret_signer_from_python(py, signer)?;
     sign_cleartext_with_signers(text, &[signer], vec![password], hash_algorithm)
 }
@@ -99,15 +99,15 @@ pub(crate) fn sign_cleartext_message(
 /// ``signers`` must contain at least one secret key. When ``passwords`` is provided, it must have
 /// the same length as ``signers`` and each entry unlocks the corresponding key.
 #[pyfunction]
-#[pyo3(signature = (text, signers, passwords=None, hash_algorithm="sha256"))]
+#[pyo3(signature = (text, signers, passwords=None, hash_algorithm=NameInput::from_static("sha256")))]
 pub(crate) fn sign_cleartext_message_many(
     py: Python<'_>,
     text: &str,
     signers: Vec<Py<PyAny>>,
     passwords: Option<Vec<Option<String>>>,
-    hash_algorithm: &str,
+    hash_algorithm: NameInput,
 ) -> PyResult<String> {
-    let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
+    let hash_algorithm = hash_algorithm_from_name(hash_algorithm.as_ref())?;
     let (signers, passwords) = signer_entries_from_python(py, signers, passwords)?;
     sign_cleartext_with_signers(text, &signers, passwords, hash_algorithm)
 }
@@ -163,7 +163,7 @@ pub(crate) fn encrypt_session_key_with_password_inner(
     session_key,
     recipient,
     version="seipd-v2",
-    symmetric_algorithm="aes256",
+    symmetric_algorithm=NameInput::from_static("aes256"),
     anonymous_recipient=false,
 ))]
 pub(crate) fn encrypt_session_key_to_recipient(
@@ -171,12 +171,12 @@ pub(crate) fn encrypt_session_key_to_recipient(
     session_key: &[u8],
     recipient: Py<PyAny>,
     version: &str,
-    symmetric_algorithm: &str,
+    symmetric_algorithm: NameInput,
     anonymous_recipient: bool,
 ) -> PyResult<PublicKeyEncryptedSessionKey> {
     let recipient = public_recipient_from_python(py, recipient)?;
     let version = encryption_version_from_name(version)?;
-    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
+    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?;
     let inner = encrypt_session_key_to_recipient_inner(
         session_key,
         &recipient,
@@ -193,19 +193,19 @@ pub(crate) fn encrypt_session_key_to_recipient(
     session_key,
     password,
     version="seipd-v2",
-    symmetric_algorithm="aes256",
-    aead_algorithm="ocb",
+    symmetric_algorithm=NameInput::from_static("aes256"),
+    aead_algorithm=NameInput::from_static("ocb"),
 ))]
 pub(crate) fn encrypt_session_key_with_password(
     session_key: &[u8],
     password: &str,
     version: &str,
-    symmetric_algorithm: &str,
-    aead_algorithm: &str,
+    symmetric_algorithm: NameInput,
+    aead_algorithm: NameInput,
 ) -> PyResult<SymKeyEncryptedSessionKey> {
     let version = encryption_version_from_name(version)?;
-    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
-    let aead_algorithm = aead_algorithm_from_name(aead_algorithm)?;
+    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?;
+    let aead_algorithm = aead_algorithm_from_name(aead_algorithm.as_ref())?;
     let inner = encrypt_session_key_with_password_inner(
         session_key,
         password,
@@ -223,8 +223,8 @@ pub(crate) fn encrypt_session_key_with_password(
     recipient,
     file_name="",
     version="seipd-v2",
-    symmetric_algorithm="aes256",
-    aead_algorithm="ocb",
+    symmetric_algorithm=NameInput::from_static("aes256"),
+    aead_algorithm=NameInput::from_static("ocb"),
     compression=None,
     session_key=None,
     anonymous_recipient=false,
@@ -236,17 +236,17 @@ pub(crate) fn encrypt_message_to_recipient_bytes(
     recipient: Py<PyAny>,
     file_name: &str,
     version: &str,
-    symmetric_algorithm: &str,
-    aead_algorithm: &str,
-    compression: Option<&str>,
+    symmetric_algorithm: NameInput,
+    aead_algorithm: NameInput,
+    compression: Option<NameInput>,
     session_key: Option<&[u8]>,
     anonymous_recipient: bool,
 ) -> PyResult<Vec<u8>> {
     let recipient = public_recipient_from_python(py, recipient)?;
     let version = encryption_version_from_name(version)?;
-    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
-    let aead_algorithm = aead_algorithm_from_name(aead_algorithm)?;
-    let compression = compression_algorithm_from_name(compression)?;
+    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?;
+    let aead_algorithm = aead_algorithm_from_name(aead_algorithm.as_ref())?;
+    let compression = compression_algorithm_from_name(compression.as_ref().map(AsRef::as_ref))?;
 
     match version {
         EncryptionVersion::SeipdV1 => {
@@ -300,8 +300,8 @@ pub(crate) fn encrypt_message_to_recipient_bytes(
     recipient,
     file_name="",
     version="seipd-v2",
-    symmetric_algorithm="aes256",
-    aead_algorithm="ocb",
+    symmetric_algorithm=NameInput::from_static("aes256"),
+    aead_algorithm=NameInput::from_static("ocb"),
     compression=None,
     session_key=None,
     anonymous_recipient=false,
@@ -313,17 +313,17 @@ pub(crate) fn encrypt_message_to_recipient(
     recipient: Py<PyAny>,
     file_name: &str,
     version: &str,
-    symmetric_algorithm: &str,
-    aead_algorithm: &str,
-    compression: Option<&str>,
+    symmetric_algorithm: NameInput,
+    aead_algorithm: NameInput,
+    compression: Option<NameInput>,
     session_key: Option<&[u8]>,
     anonymous_recipient: bool,
 ) -> PyResult<String> {
     let recipient = public_recipient_from_python(py, recipient)?;
     let version = encryption_version_from_name(version)?;
-    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
-    let aead_algorithm = aead_algorithm_from_name(aead_algorithm)?;
-    let compression = compression_algorithm_from_name(compression)?;
+    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?;
+    let aead_algorithm = aead_algorithm_from_name(aead_algorithm.as_ref())?;
+    let compression = compression_algorithm_from_name(compression.as_ref().map(AsRef::as_ref))?;
 
     match version {
         EncryptionVersion::SeipdV1 => {
@@ -384,8 +384,8 @@ pub(crate) fn encrypt_message_to_recipient(
     recipients,
     file_name="",
     version="seipd-v2",
-    symmetric_algorithm="aes256",
-    aead_algorithm="ocb",
+    symmetric_algorithm=NameInput::from_static("aes256"),
+    aead_algorithm=NameInput::from_static("ocb"),
     compression=None,
     session_key=None,
     anonymous_recipient=false,
@@ -397,17 +397,17 @@ pub(crate) fn encrypt_message_to_recipients_bytes(
     recipients: Vec<Py<PyAny>>,
     file_name: &str,
     version: &str,
-    symmetric_algorithm: &str,
-    aead_algorithm: &str,
-    compression: Option<&str>,
+    symmetric_algorithm: NameInput,
+    aead_algorithm: NameInput,
+    compression: Option<NameInput>,
     session_key: Option<&[u8]>,
     anonymous_recipient: bool,
 ) -> PyResult<Vec<u8>> {
     let recipients = public_recipients_from_python(py, recipients)?;
     let version = encryption_version_from_name(version)?;
-    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
-    let aead_algorithm = aead_algorithm_from_name(aead_algorithm)?;
-    let compression = compression_algorithm_from_name(compression)?;
+    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?;
+    let aead_algorithm = aead_algorithm_from_name(aead_algorithm.as_ref())?;
+    let compression = compression_algorithm_from_name(compression.as_ref().map(AsRef::as_ref))?;
 
     match version {
         EncryptionVersion::SeipdV1 => {
@@ -468,8 +468,8 @@ pub(crate) fn encrypt_message_to_recipients_bytes(
     recipients,
     file_name="",
     version="seipd-v2",
-    symmetric_algorithm="aes256",
-    aead_algorithm="ocb",
+    symmetric_algorithm=NameInput::from_static("aes256"),
+    aead_algorithm=NameInput::from_static("ocb"),
     compression=None,
     session_key=None,
     anonymous_recipient=false,
@@ -481,17 +481,17 @@ pub(crate) fn encrypt_message_to_recipients(
     recipients: Vec<Py<PyAny>>,
     file_name: &str,
     version: &str,
-    symmetric_algorithm: &str,
-    aead_algorithm: &str,
-    compression: Option<&str>,
+    symmetric_algorithm: NameInput,
+    aead_algorithm: NameInput,
+    compression: Option<NameInput>,
     session_key: Option<&[u8]>,
     anonymous_recipient: bool,
 ) -> PyResult<String> {
     let recipients = public_recipients_from_python(py, recipients)?;
     let version = encryption_version_from_name(version)?;
-    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
-    let aead_algorithm = aead_algorithm_from_name(aead_algorithm)?;
-    let compression = compression_algorithm_from_name(compression)?;
+    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?;
+    let aead_algorithm = aead_algorithm_from_name(aead_algorithm.as_ref())?;
+    let compression = compression_algorithm_from_name(compression.as_ref().map(AsRef::as_ref))?;
 
     match version {
         EncryptionVersion::SeipdV1 => {
@@ -553,8 +553,8 @@ pub(crate) fn encrypt_message_to_recipients(
     password,
     file_name="",
     version="seipd-v2",
-    symmetric_algorithm="aes256",
-    aead_algorithm="ocb",
+    symmetric_algorithm=NameInput::from_static("aes256"),
+    aead_algorithm=NameInput::from_static("ocb"),
     compression=None,
     session_key=None,
 ))]
@@ -564,15 +564,15 @@ pub(crate) fn encrypt_message_with_password_bytes(
     password: &str,
     file_name: &str,
     version: &str,
-    symmetric_algorithm: &str,
-    aead_algorithm: &str,
-    compression: Option<&str>,
+    symmetric_algorithm: NameInput,
+    aead_algorithm: NameInput,
+    compression: Option<NameInput>,
     session_key: Option<&[u8]>,
 ) -> PyResult<Vec<u8>> {
     let version = encryption_version_from_name(version)?;
-    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
-    let aead_algorithm = aead_algorithm_from_name(aead_algorithm)?;
-    let compression = compression_algorithm_from_name(compression)?;
+    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?;
+    let aead_algorithm = aead_algorithm_from_name(aead_algorithm.as_ref())?;
+    let compression = compression_algorithm_from_name(compression.as_ref().map(AsRef::as_ref))?;
     let password = Password::from(password);
 
     match version {
@@ -635,8 +635,8 @@ pub(crate) fn encrypt_message_with_password_bytes(
     password,
     file_name="",
     version="seipd-v2",
-    symmetric_algorithm="aes256",
-    aead_algorithm="ocb",
+    symmetric_algorithm=NameInput::from_static("aes256"),
+    aead_algorithm=NameInput::from_static("ocb"),
     compression=None,
     session_key=None,
 ))]
@@ -646,15 +646,15 @@ pub(crate) fn encrypt_message_with_password(
     password: &str,
     file_name: &str,
     version: &str,
-    symmetric_algorithm: &str,
-    aead_algorithm: &str,
-    compression: Option<&str>,
+    symmetric_algorithm: NameInput,
+    aead_algorithm: NameInput,
+    compression: Option<NameInput>,
     session_key: Option<&[u8]>,
 ) -> PyResult<String> {
     let version = encryption_version_from_name(version)?;
-    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
-    let aead_algorithm = aead_algorithm_from_name(aead_algorithm)?;
-    let compression = compression_algorithm_from_name(compression)?;
+    let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?;
+    let aead_algorithm = aead_algorithm_from_name(aead_algorithm.as_ref())?;
+    let compression = compression_algorithm_from_name(compression.as_ref().map(AsRef::as_ref))?;
     let password = Password::from(password);
 
     match version {
@@ -714,41 +714,28 @@ pub(crate) fn encrypt_message_with_password(
     }
 }
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(pyo3::wrap_pyfunction!(sign_message, module)?)?;
-    module.add_function(pyo3::wrap_pyfunction!(sign_message_many, module)?)?;
-    module.add_function(pyo3::wrap_pyfunction!(sign_cleartext_message, module)?)?;
-    module.add_function(pyo3::wrap_pyfunction!(sign_cleartext_message_many, module)?)?;
-    module.add_function(pyo3::wrap_pyfunction!(
-        encrypt_session_key_to_recipient,
-        module
-    )?)?;
-    module.add_function(pyo3::wrap_pyfunction!(
-        encrypt_session_key_with_password,
-        module
-    )?)?;
-    module.add_function(pyo3::wrap_pyfunction!(
-        encrypt_message_to_recipient_bytes,
-        module
-    )?)?;
-    module.add_function(pyo3::wrap_pyfunction!(
-        encrypt_message_to_recipients_bytes,
-        module
-    )?)?;
-    module.add_function(pyo3::wrap_pyfunction!(
-        encrypt_message_to_recipient,
-        module
-    )?)?;
-    module.add_function(pyo3::wrap_pyfunction!(
-        encrypt_message_to_recipients,
-        module
-    )?)?;
-    module.add_function(pyo3::wrap_pyfunction!(
-        encrypt_message_with_password_bytes,
-        module
-    )?)?;
-    module.add_function(pyo3::wrap_pyfunction!(
-        encrypt_message_with_password,
-        module
-    )?)?;
+    let public_module = PyModule::new(module.py(), "openpgp.util")?;
+
+    macro_rules! add_function {
+        ($name:ident) => {
+            module.add(
+                stringify!($name),
+                pyo3::wrap_pyfunction!($name, &public_module)?,
+            )?;
+        };
+    }
+
+    add_function!(sign_message);
+    add_function!(sign_message_many);
+    add_function!(sign_cleartext_message);
+    add_function!(sign_cleartext_message_many);
+    add_function!(encrypt_session_key_to_recipient);
+    add_function!(encrypt_session_key_with_password);
+    add_function!(encrypt_message_to_recipient_bytes);
+    add_function!(encrypt_message_to_recipients_bytes);
+    add_function!(encrypt_message_to_recipient);
+    add_function!(encrypt_message_to_recipients);
+    add_function!(encrypt_message_with_password_bytes);
+    add_function!(encrypt_message_with_password);
     Ok(())
 }

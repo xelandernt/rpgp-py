@@ -1,15 +1,64 @@
-use crate::{conversions::*, info::*, to_py_err};
+use crate::{
+    conversions::*,
+    crypto::PyHashAlgorithm,
+    info::*,
+    packet::key_packets::{PublicKey, PublicSubkey},
+    to_py_err,
+};
 use pgp::{packet::Signature as PgpSignature, ser::Serialize};
 use pyo3::prelude::*;
 
 #[pyclass(module = "openpgp.packet", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct Signature {
-    inner: PgpSignature,
+    pub(crate) inner: PgpSignature,
 }
 
 #[pymethods]
 impl Signature {
+    /// Verify a data signature with a public key packet.
+    fn verify(&self, key: PyRef<'_, PublicKey>, content: &[u8]) -> PyResult<()> {
+        self.inner.verify(&key.inner, content).map_err(to_py_err)
+    }
+
+    /// Verify a direct-key self-signature or key-revocation signature.
+    fn verify_key(&self, key: PyRef<'_, PublicKey>) -> PyResult<()> {
+        self.inner.verify_key(&key.inner).map_err(to_py_err)
+    }
+
+    /// Verify a third-party direct-key or key-revocation signature.
+    fn verify_key_third_party(
+        &self,
+        signee: PyRef<'_, PublicKey>,
+        signer: PyRef<'_, PublicKey>,
+    ) -> PyResult<()> {
+        self.inner
+            .verify_key_third_party(&signee.inner, &signer.inner)
+            .map_err(to_py_err)
+    }
+
+    /// Verify a subkey-binding or subkey-revocation signature.
+    fn verify_subkey_binding(
+        &self,
+        signer: PyRef<'_, PublicKey>,
+        signee: PyRef<'_, PublicSubkey>,
+    ) -> PyResult<()> {
+        self.inner
+            .verify_subkey_binding(&signer.inner, &signee.inner)
+            .map_err(to_py_err)
+    }
+
+    /// Verify a primary-key-binding signature made by a signing subkey.
+    fn verify_primary_key_binding(
+        &self,
+        signer: PyRef<'_, PublicSubkey>,
+        signee: PyRef<'_, PublicKey>,
+    ) -> PyResult<()> {
+        self.inner
+            .verify_primary_key_binding(&signer.inner, &signee.inner)
+            .map_err(to_py_err)
+    }
+
     fn version(&self) -> u8 {
         signature_version_number(self.inner.version())
     }
@@ -22,6 +71,11 @@ impl Signature {
 
     fn hash_alg(&self) -> Option<String> {
         self.inner.hash_alg().map(normalized_algorithm_name)
+    }
+
+    /// Return the native rPGP hash algorithm enum.
+    fn hash_algorithm(&self) -> Option<PyHashAlgorithm> {
+        self.inner.hash_alg().map(|inner| PyHashAlgorithm { inner })
     }
 
     fn signed_hash_value(&self) -> Option<Vec<u8>> {

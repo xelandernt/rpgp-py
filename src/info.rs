@@ -821,7 +821,7 @@ impl Notation {
 /// Decoded designated-revocation-key metadata from a signature.
 ///
 /// This reflects the deprecated RFC 9580 revocation-key subpacket, when present.
-#[pyclass(module = "openpgp.packet", from_py_object)]
+#[pyclass(module = "openpgp.types", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct RevocationKey {
     pub(crate) class_id: u8,

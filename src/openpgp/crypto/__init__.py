@@ -1,5 +1,5 @@
 """Cryptographic algorithm namespaces matching the rPGP module layout."""
 
-from . import aead, hash, public_key, sym
+from . import aead, ecc_curve, hash, public_key, sym
 
-__all__ = ["aead", "hash", "public_key", "sym"]
+__all__ = ["aead", "ecc_curve", "hash", "public_key", "sym"]

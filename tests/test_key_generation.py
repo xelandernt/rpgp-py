@@ -935,6 +935,11 @@ def test_v6_certificate_metadata_moves_to_direct_key_signature() -> None:
     public_direct = public_direct_signatures[0]
     assert secret_direct.typ() == "direct-key"
     assert public_direct.typ() == "direct-key"
+    secret_direct.verify_key(secret_key.to_public_key().primary_key)
+    public_direct.verify_key(public_key.primary_key)
+    unrelated_key = build_modern_signing_key(6).generate().to_public_key()
+    with pytest.raises(ValueError):
+        public_direct.verify_key(unrelated_key.primary_key)
     assert_certificate_preferences_are_exposed_on_signature(
         secret_direct,
         has_features=True,
@@ -970,6 +975,30 @@ def test_v6_certificate_metadata_moves_to_direct_key_signature() -> None:
     assert public_binding_info.key_flags().sign is False
     assert secret_binding_info.features() is None
     assert public_binding_info.features() is None
+
+
+def test_exposed_signature_verifies_subkey_binding_individually() -> None:
+    """Expose rPGP's packet-level subkey-binding verification in Python."""
+    public_key = (
+        build_modern_signing_key(6)
+        .subkey(
+            SubkeyParamsBuilder()
+            .version(6)
+            .key_type(KeyType.x25519())
+            .can_encrypt(EncryptionCaps.all())
+            .build()
+        )
+        .generate()
+        .to_public_key()
+    )
+    signed_subkey = public_key.public_subkeys[0]
+    signature = signed_subkey.signatures[0]
+
+    signature.verify_subkey_binding(public_key.primary_key, signed_subkey.key)
+
+    unrelated_key = build_modern_signing_key(6).generate().to_public_key()
+    with pytest.raises(ValueError):
+        signature.verify_subkey_binding(unrelated_key.primary_key, signed_subkey.key)
 
 
 def test_v6_id_less_certificate_still_exposes_direct_key_signature_metadata() -> None:

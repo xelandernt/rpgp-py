@@ -1,4 +1,5 @@
 use crate::conversions::*;
+use crate::crypto::{PyAeadAlgorithm, PyHashAlgorithm, PySymmetricKeyAlgorithm};
 use crate::serialization::{exact_or_random_array, exact_or_random_vec};
 use crate::*;
 
@@ -61,10 +62,10 @@ impl PyStringToKey {
     /// ``count`` is the encoded iteration-count octet from RFC 9580 section 3.7.1.3.
     #[staticmethod]
     #[pyo3(signature = (hash_algorithm, count, salt=None))]
-    fn iterated(hash_algorithm: &str, count: u8, salt: Option<&[u8]>) -> PyResult<Self> {
+    fn iterated(hash_algorithm: NameInput, count: u8, salt: Option<&[u8]>) -> PyResult<Self> {
         Ok(Self {
             inner: PgpStringToKey::IteratedAndSalted {
-                hash_alg: hash_algorithm_from_name(hash_algorithm)?,
+                hash_alg: hash_algorithm_from_name(hash_algorithm.as_ref())?,
                 salt: exact_or_random_array::<8>(salt, "salt")?,
                 count,
             },
@@ -112,6 +113,18 @@ impl PyStringToKey {
             | PgpStringToKey::Salted { hash_alg, .. }
             | PgpStringToKey::IteratedAndSalted { hash_alg, .. } => {
                 Some(normalized_algorithm_name(hash_alg))
+            }
+            _ => None,
+        }
+    }
+
+    #[getter]
+    fn hash_algorithm_type(&self) -> Option<PyHashAlgorithm> {
+        match &self.inner {
+            PgpStringToKey::Simple { hash_alg }
+            | PgpStringToKey::Salted { hash_alg, .. }
+            | PgpStringToKey::IteratedAndSalted { hash_alg, .. } => {
+                Some(PyHashAlgorithm { inner: *hash_alg })
             }
             _ => None,
         }
@@ -188,7 +201,7 @@ impl PyS2kParams {
     #[staticmethod]
     #[pyo3(signature = (symmetric_algorithm, string_to_key, iv=None))]
     fn cfb(
-        symmetric_algorithm: &str,
+        symmetric_algorithm: NameInput,
         string_to_key: PyRef<'_, PyStringToKey>,
         iv: Option<&[u8]>,
     ) -> PyResult<Self> {
@@ -198,7 +211,7 @@ impl PyS2kParams {
             ));
         }
 
-        let sym_alg = symmetric_algorithm_from_name(symmetric_algorithm)?;
+        let sym_alg = symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?;
         let iv = exact_or_random_vec(iv, sym_alg.block_size(), "iv")?;
         Ok(Self {
             inner: PgpS2kParams::Cfb {
@@ -213,13 +226,13 @@ impl PyS2kParams {
     #[staticmethod]
     #[pyo3(signature = (symmetric_algorithm, aead_algorithm, string_to_key, nonce=None))]
     fn aead(
-        symmetric_algorithm: &str,
-        aead_algorithm: &str,
+        symmetric_algorithm: NameInput,
+        aead_algorithm: NameInput,
         string_to_key: PyRef<'_, PyStringToKey>,
         nonce: Option<&[u8]>,
     ) -> PyResult<Self> {
-        let sym_alg = symmetric_algorithm_from_name(symmetric_algorithm)?;
-        let aead_mode = aead_algorithm_from_name(aead_algorithm)?;
+        let sym_alg = symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?;
+        let aead_mode = aead_algorithm_from_name(aead_algorithm.as_ref())?;
         let nonce = exact_or_random_vec(nonce, aead_mode.nonce_size(), "nonce")?;
         Ok(Self {
             inner: PgpS2kParams::Aead {
@@ -257,11 +270,32 @@ impl PyS2kParams {
         }
     }
 
+    #[getter]
+    fn symmetric_algorithm_type(&self) -> Option<PySymmetricKeyAlgorithm> {
+        match &self.inner {
+            PgpS2kParams::Unprotected => None,
+            PgpS2kParams::LegacyCfb { sym_alg, .. }
+            | PgpS2kParams::Aead { sym_alg, .. }
+            | PgpS2kParams::Cfb { sym_alg, .. }
+            | PgpS2kParams::MalleableCfb { sym_alg, .. } => {
+                Some(PySymmetricKeyAlgorithm { inner: *sym_alg })
+            }
+        }
+    }
+
     /// Return the AEAD algorithm name for AEAD-protected secret material, if present.
     #[getter]
     fn aead_algorithm(&self) -> Option<String> {
         match &self.inner {
             PgpS2kParams::Aead { aead_mode, .. } => Some(normalized_algorithm_name(aead_mode)),
+            _ => None,
+        }
+    }
+
+    #[getter]
+    fn aead_algorithm_type(&self) -> Option<PyAeadAlgorithm> {
+        match &self.inner {
+            PgpS2kParams::Aead { aead_mode, .. } => Some(PyAeadAlgorithm { inner: *aead_mode }),
             _ => None,
         }
     }

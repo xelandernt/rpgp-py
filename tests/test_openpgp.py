@@ -6,6 +6,16 @@ from typing import Any, TypedDict, cast
 
 import pytest
 
+import openpgp.composed as composed_api
+import openpgp.packet as packet_api
+from openpgp import MAX_BUFFER_SIZE, VERSION
+from openpgp.armor import BlockType, Dearmor, write as armor_write
+from openpgp.crypto.aead import AeadAlgorithm, ChunkSize
+from openpgp.crypto.ecc_curve import ECCCurve
+from openpgp.crypto.hash import HashAlgorithm
+from openpgp.crypto.sym import SymmetricKeyAlgorithm
+from openpgp.errors import Error
+from openpgp.ser import serialize, write as serialize_write, write_len
 from openpgp.util import (
     encrypt_session_key_to_recipient,
     encrypt_session_key_with_password,
@@ -24,8 +34,22 @@ from openpgp.composed import (
     SignedSecretKey,
     SubkeyParamsBuilder,
 )
-from openpgp.packet import Signature
-from openpgp.types import StringToKey
+from openpgp.packet import Packet, PacketParser, PublicKey, Signature
+from openpgp.types import (
+    CompressionAlgorithm,
+    Duration,
+    Fingerprint,
+    KeyId,
+    KeyVersion,
+    Mpi,
+    PacketLength,
+    RevocationKey,
+    SignedUser,
+    SignedUserAttribute,
+    StringToKey,
+    Tag,
+    Timestamp,
+)
 
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -436,6 +460,101 @@ def test_parse_public_key_from_armor() -> None:
     key.verify_bindings()
 
 
+def test_packet_parser_exposes_native_packet_values() -> None:
+    key, _ = SignedPublicKey.from_armor(read_fixture_text("rsa-rsa-sample-1.asc"))
+    packets = list(PacketParser(key.to_bytes()))
+
+    assert packets
+    assert packets[0].kind == "public-key"
+    assert packets[0].header.tag == 6
+    assert isinstance(packets[0].value, PublicKey)
+    assert packets[0].to_bytes() == packets[0].value.to_bytes()
+    assert Packet.from_bytes(packets[0].to_bytes()).kind == "public-key"
+
+
+def test_native_armor_and_serialization_namespaces() -> None:
+    key, _ = SignedPublicKey.from_armor(read_fixture_text("rsa-rsa-sample-1.asc"))
+    armored = io.StringIO()
+
+    armor_write(key, BlockType.PublicKey, armored, {"Comment": ["native rPGP"]})
+    dearmor = Dearmor(armored.getvalue())
+
+    assert VERSION == "0.20.0"
+    assert MAX_BUFFER_SIZE == 1024 * 1024 * 1024
+    assert dearmor.typ == BlockType.PublicKey
+    assert dearmor.headers == {"Comment": ["native rPGP"]}
+    assert dearmor.readall() == key.to_bytes()
+    assert serialize(key) == key.to_bytes()
+    assert write_len(key) == len(key.to_bytes())
+    assert armor_write.__name__ == "write"
+    assert armor_write.__module__ == "openpgp.armor"
+    assert serialize.__name__ == "serialize"
+    assert serialize.__module__ == "openpgp.ser"
+    assert serialize_write.__name__ == "write"
+    assert serialize_write.__module__ == "openpgp.ser"
+    assert write_len.__name__ == "write_len"
+    assert write_len.__module__ == "openpgp.ser"
+    assert _openpgp_sign_cleartext_message_many.__module__ == "openpgp.util"
+
+    output = io.BytesIO()
+    serialize_write(key, output)
+    assert output.getvalue() == key.to_bytes()
+
+    assert Error.__module__ == "openpgp.errors"
+    assert str(Error) == "<class 'openpgp.errors.Error'>"
+    assert Error("manual binding error").code == "BINDING"
+
+    with pytest.raises(Error) as error:
+        Dearmor("not ASCII armor")
+    assert error.value.code
+
+
+def test_upstream_shared_types_use_types_namespace() -> None:
+    key, _ = SignedPublicKey.from_armor(read_fixture_text("rsa-rsa-sample-1.asc"))
+
+    assert SignedUser.__module__ == "openpgp.types"
+    assert SignedUserAttribute.__module__ == "openpgp.types"
+    assert RevocationKey.__module__ == "openpgp.types"
+    assert isinstance(key.details.users[0], SignedUser)
+    assert not hasattr(composed_api, "SignedUser")
+    assert not hasattr(composed_api, "SignedUserAttribute")
+    assert not hasattr(packet_api, "RevocationKey")
+
+
+def test_native_algorithm_bindings_delegate_to_rpgp() -> None:
+    assert HashAlgorithm.Sha256.digest(b"abc").hex() == (
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    )
+    assert HashAlgorithm.Sha256.digest_size() == 32
+    assert SymmetricKeyAlgorithm.AES256.key_size() == 32
+    assert AeadAlgorithm.Ocb.nonce_size() == 15
+    assert ChunkSize().as_byte_size() == 4096
+    assert ECCCurve.P256.hash_algo() == HashAlgorithm.Sha256
+
+    string_to_key = StringToKey.iterated(HashAlgorithm.Sha256, 96, bytes(8))
+    assert string_to_key.hash_algorithm_type == HashAlgorithm.Sha256
+    MessageBuilder.from_bytes("payload", b"data").compression(
+        CompressionAlgorithm.ZLIB
+    ).seipd_v2(SymmetricKeyAlgorithm.AES256, AeadAlgorithm.Ocb)
+    assert KeyType.ecdsa(ECCCurve.P256).can_sign()
+
+
+def test_native_core_value_types_round_trip() -> None:
+    assert Duration.from_secs(9).to_bytes() == b"\x00\x00\x00\x09"
+    assert Timestamp.from_secs(10).to_bytes() == b"\x00\x00\x00\x0a"
+    assert KeyVersion.V6.fingerprint_len() == 32
+    fingerprint = Fingerprint(KeyVersion.V4, bytes(range(20)))
+    assert bytes(fingerprint) == bytes(range(20))
+    assert KeyId.WILDCARD.is_wildcard()
+    assert bytes(KeyId(bytes(range(8)))) == bytes(range(8))
+    mpi = Mpi.from_slice(b"\x00\x01\xff")
+    assert bytes(mpi) == b"\x01\xff"
+    assert Mpi.try_from_reader(mpi.to_bytes()) == mpi
+    assert PacketLength.try_from_reader(b"\x05") == PacketLength.fixed(5)
+    assert Tag.PublicKey.value == 6
+    assert Tag.PublicKey.encode() == 0xC6
+
+
 def test_parse_secret_key_and_convert_to_public() -> None:
     secret_key, headers = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
@@ -632,6 +751,7 @@ def test_sign_and_verify_detached_signature() -> None:
     assert info.hash_alg() == "sha256"
     assert info.notations() == []
     assert info.revocation_key() is None
+    info.verify(public_key.primary_key, payload)
     signature.verify(public_key, payload)
     assert (
         signature.verify_signature(public_key, payload).signed_hash_value()
@@ -643,6 +763,20 @@ def test_sign_and_verify_detached_signature() -> None:
 
     armored_signature, headers = DetachedSignature.from_armor(signature.to_armored())
     assert headers == {}
+
+
+def test_signature_verifies_embedded_primary_key_binding() -> None:
+    secret_key = generate_subkey_signing_and_encryption_key(
+        "Embedded Binding <binding@example.com>"
+    )
+    public_key = secret_key.to_public_key()
+    signed_subkey = public_key.public_subkeys[0]
+    binding = signed_subkey.signatures[0]
+    embedded = binding.embedded_signature()
+
+    assert embedded is not None
+    assert embedded.typ() == "primary-key-binding"
+    embedded.verify_primary_key_binding(signed_subkey.key, public_key.primary_key)
 
 
 def test_detached_signature_sign_binary_accepts_secret_subkey() -> None:

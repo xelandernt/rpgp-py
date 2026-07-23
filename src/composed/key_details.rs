@@ -14,7 +14,7 @@ use pgp::{
 };
 use pyo3::prelude::*;
 
-#[pyclass(module = "openpgp.composed", skip_from_py_object)]
+#[pyclass(module = "openpgp.types", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct SignedUser {
     id: String,
@@ -65,7 +65,7 @@ fn signed_user_from_raw(user: &PgpSignedUser) -> SignedUser {
     }
 }
 
-#[pyclass(module = "openpgp.composed", skip_from_py_object)]
+#[pyclass(module = "openpgp.types", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct SignedUserAttribute {
     attr: UserAttribute,

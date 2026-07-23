@@ -6,8 +6,8 @@
 [![pyrefly](https://img.shields.io/endpoint?url=https://pyrefly.org/badge.json)](https://github.com/facebook/pyrefly)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-Python bindings for [`rPGP`](https://github.com/rpgp/rpgp), exposed as the
-`openpgp` package.
+Selected native Python bindings for [`rPGP`](https://github.com/rpgp/rpgp),
+exposed as the `openpgp` package.
 
 ## Installation
 
@@ -19,21 +19,22 @@ Requires Python 3.10 or newer.
 
 ## API layout
 
-The top-level `openpgp` package exposes namespace modules only. Import the API
-from the namespace that matches the upstream Rust module:
+Exposed rPGP types live in the namespace that matches their upstream Rust
+module. The upstream documentation is therefore useful for the exposed names
+and their OpenPGP semantics, but this package is not a complete projection of
+every rPGP module or trait.
 
-| Python namespace | Purpose |
-| --- | --- |
-| `openpgp.composed` | Transferable keys, messages, signatures, message builders, and key-generation builders. |
-| `openpgp.packet` | Packet-shaped objects such as key packets, signatures, session-key packets, features, flags, and encrypted data packets. |
-| `openpgp.types` | Public-parameter objects, S2K configuration, packet header versions, and shared type helpers. |
-| `openpgp.crypto` | Crypto algorithm namespaces. |
-| `openpgp.util` | Binding-specific helper functions built on top of the Rust-shaped API. |
+| Python namespace   | Purpose                                                                                                                  |
+|--------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `openpgp.armor`    | Native rPGP ASCII armor reader, writer, block types, and CRC status.                                                     |
+| `openpgp.composed` | Transferable keys, messages, signatures, message builders, and key-generation builders.                                  |
+| `openpgp.packet`   | Packet-shaped objects such as key packets, signatures, session-key packets, features, flags, and encrypted data packets. |
+| `openpgp.types`    | Public-parameter objects, S2K configuration, packet header versions, and shared type helpers.                            |
+| `openpgp.crypto`   | Crypto algorithm namespaces.                                                                                             |
+| `openpgp.errors`   | The native rPGP binding exception.                                                                                       |
+| `openpgp.ser`      | Native serialization helpers corresponding to rPGP's `Serialize` trait.                                                  |
+| `openpgp.util`     | Binding-specific helper functions built on top of the Rust-shaped API.                                                   |
 
-The core names intentionally mirror rPGP. For example, transferable keys are
-`SignedPublicKey` and `SignedSecretKey` in `openpgp.composed`, while key packets
-are `PublicKey`, `SecretKey`, `PublicSubkey`, and `SecretSubkey` in
-`openpgp.packet`.
 
 ## Functionality
 
@@ -51,6 +52,9 @@ are `PublicKey`, `SecretKey`, `PublicSubkey`, and `SecretSubkey` in
 - generate modern OpenPGP key material, including v6 Ed25519/X25519 keys,
 - use RFC 9580-era features exposed by rPGP, including SEIPD v2, OCB, and
   Argon2 S2K,
+- parse and serialize individual native packet values and verify individual
+  key and subkey signature packets,
+- use native armor, error, serialization, value-type, and algorithm bindings,
 - use convenience helpers from `openpgp.util` when you want one-call signing or
   encryption.
 
@@ -273,44 +277,6 @@ multi-recipient, password-encryption, and session-key helpers.
 - [`pgp` crate API docs on docs.rs](https://docs.rs/pgp/latest/pgp/)
 - [RFC 9580](https://www.rfc-editor.org/rfc/rfc9580)
 
-## Development
-
-This project uses `uv`, `maturin`, and `just`.
-
-Install development dependencies:
-
-```bash
-just install
-```
-
-Build the extension in the current environment:
-
-```bash
-uv run --no-sync maturin develop
-```
-
-Run checks:
-
-```bash
-just lint
-just typecheck
-just test
-```
-
-Run a single Python test file:
-
-```bash
-uv run --no-sync pytest tests/test_openpgp.py -q
-```
-
-Build a wheel:
-
-```bash
-uv build
-```
-
-After changing Rust sources, rebuild with `uv run --no-sync maturin develop`
-before running Python tests.
 
 ## Versioning
 

@@ -1,5 +1,17 @@
 """Python bindings for rPGP with a Rust-shaped module layout."""
 
-from . import composed, crypto, packet, types, util
+from . import armor, composed, crypto, errors, packet, ser, types, util
+from ._openpgp import MAX_BUFFER_SIZE, VERSION
 
-__all__ = ["composed", "crypto", "packet", "types", "util"]
+__all__ = [
+    "MAX_BUFFER_SIZE",
+    "VERSION",
+    "armor",
+    "composed",
+    "crypto",
+    "errors",
+    "packet",
+    "ser",
+    "types",
+    "util",
+]

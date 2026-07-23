@@ -1,12 +1,6 @@
-"""Symmetric-key algorithm names accepted by the rPGP Python bindings."""
+"""Thin namespace for rPGP's native symmetric algorithm binding."""
 
-from enum import Enum
-
-
-class SymmetricKeyAlgorithm(str, Enum):
-    Aes128 = "aes128"
-    Aes192 = "aes192"
-    Aes256 = "aes256"
+from .._openpgp import SymmetricKeyAlgorithm
 
 
 __all__ = ["SymmetricKeyAlgorithm"]

@@ -24,7 +24,8 @@ use pyo3::{
 };
 
 use crate::conversions::{
-    aead_algorithm_from_name, compression_algorithm_from_name, symmetric_algorithm_from_name,
+    NameInput, aead_algorithm_from_name, compression_algorithm_from_name,
+    symmetric_algorithm_from_name,
 };
 use crate::{
     Headers,
@@ -887,9 +888,10 @@ impl PyMessageBuilder {
 
     fn compression<'py>(
         mut slf: PyRefMut<'py, Self>,
-        compression: &str,
+        compression: NameInput,
     ) -> PyResult<PyRefMut<'py, Self>> {
-        slf.config_mut()?.compression = compression_algorithm_from_name(Some(compression))?;
+        slf.config_mut()?.compression =
+            compression_algorithm_from_name(Some(compression.as_ref()))?;
         Ok(slf)
     }
 
@@ -905,7 +907,7 @@ impl PyMessageBuilder {
 
     fn seipd_v1<'py>(
         mut slf: PyRefMut<'py, Self>,
-        symmetric_algorithm: &str,
+        symmetric_algorithm: NameInput,
     ) -> PyResult<PyRefMut<'py, Self>> {
         let config = slf.config_mut()?;
         if !matches!(config.encryption, EncryptionConfig::Plaintext) {
@@ -913,7 +915,7 @@ impl PyMessageBuilder {
                 "message builder is already configured for encryption",
             ));
         }
-        let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
+        let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?;
         config.encryption = EncryptionConfig::SeipdV1 {
             symmetric_algorithm,
             session_key: symmetric_algorithm
@@ -929,8 +931,8 @@ impl PyMessageBuilder {
     #[pyo3(signature = (symmetric_algorithm, aead_algorithm, chunk_size=None))]
     fn seipd_v2<'py>(
         mut slf: PyRefMut<'py, Self>,
-        symmetric_algorithm: &str,
-        aead_algorithm: &str,
+        symmetric_algorithm: NameInput,
+        aead_algorithm: NameInput,
         chunk_size: Option<u8>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         let config = slf.config_mut()?;
@@ -939,10 +941,10 @@ impl PyMessageBuilder {
                 "message builder is already configured for encryption",
             ));
         }
-        let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm)?;
+        let symmetric_algorithm = symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?;
         config.encryption = EncryptionConfig::SeipdV2 {
             symmetric_algorithm,
-            aead_algorithm: aead_algorithm_from_name(aead_algorithm)?,
+            aead_algorithm: aead_algorithm_from_name(aead_algorithm.as_ref())?,
             chunk_size: match chunk_size {
                 Some(chunk_size) => chunk_size_from_number(chunk_size)?,
                 None => ChunkSize::default(),
@@ -997,18 +999,18 @@ impl PyMessageBuilder {
         }
     }
 
-    #[pyo3(signature = (key, password=None, hash_algorithm="sha256"))]
+    #[pyo3(signature = (key, password=None, hash_algorithm=NameInput::from_static("sha256")))]
     fn sign<'py>(
         mut slf: PyRefMut<'py, Self>,
         py: Python<'_>,
         key: Py<PyAny>,
         password: Option<&str>,
-        hash_algorithm: &str,
+        hash_algorithm: NameInput,
     ) -> PyResult<PyRefMut<'py, Self>> {
         let signature = SignatureConfig {
             signer: secret_signer_from_python(py, key)?,
             password: password.unwrap_or_default().to_string(),
-            hash_algorithm: crate::conversions::hash_algorithm_from_name(hash_algorithm)?,
+            hash_algorithm: crate::conversions::hash_algorithm_from_name(hash_algorithm.as_ref())?,
         };
         slf.config_mut()?.signatures.push(signature);
         Ok(slf)

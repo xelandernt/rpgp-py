@@ -1,12 +1,6 @@
-"""AEAD algorithm names accepted by the rPGP Python bindings."""
+"""Thin namespace for rPGP's native AEAD bindings."""
 
-from enum import Enum
-
-
-class AeadAlgorithm(str, Enum):
-    Eax = "eax"
-    Ocb = "ocb"
-    Gcm = "gcm"
+from .._openpgp import AeadAlgorithm, ChunkSize
 
 
-__all__ = ["AeadAlgorithm"]
+__all__ = ["AeadAlgorithm", "ChunkSize"]

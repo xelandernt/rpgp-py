@@ -659,13 +659,13 @@ impl Message {
         &self,
         py: Python<'_>,
         session_key: &[u8],
-        symmetric_algorithm: Option<&str>,
+        symmetric_algorithm: Option<NameInput>,
     ) -> PyResult<Py<PyAny>> {
         let plain_session_key = plain_session_key_from_message_source(
             &self.source,
             &self.info.headers,
             session_key,
-            symmetric_algorithm,
+            symmetric_algorithm.as_ref().map(AsRef::as_ref),
         )?;
         let (message, _) = parse_message(&self.source).map_err(to_py_err)?;
         let decrypted = message
@@ -971,11 +971,11 @@ impl DetachedSignature {
         rng: Py<PyAny>,
         key: Py<PyAny>,
         password: Option<&str>,
-        hash_algorithm: &str,
+        hash_algorithm: NameInput,
         data: &[u8],
     ) -> PyResult<Self> {
         let password = password_from_option(password);
-        let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
+        let hash_algorithm = hash_algorithm_from_name(hash_algorithm.as_ref())?;
         let signer = secret_signer_from_python(py, key)?;
         let rng = PythonCryptoRng { py, rng };
         let inner = match signer {
@@ -1009,11 +1009,11 @@ impl DetachedSignature {
         rng: Py<PyAny>,
         key: Py<PyAny>,
         password: Option<&str>,
-        hash_algorithm: &str,
+        hash_algorithm: NameInput,
         data: &[u8],
     ) -> PyResult<Self> {
         let password = password_from_option(password);
-        let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
+        let hash_algorithm = hash_algorithm_from_name(hash_algorithm.as_ref())?;
         let signer = secret_signer_from_python(py, key)?;
         let rng = PythonCryptoRng { py, rng };
         let inner = match signer {
@@ -1143,16 +1143,16 @@ impl CleartextSignedMessage {
 
     /// Create a cleartext signed message using the selected hash algorithm.
     #[staticmethod]
-    #[pyo3(signature = (text, key, password=None, hash_algorithm="sha256"))]
+    #[pyo3(signature = (text, key, password=None, hash_algorithm=NameInput::from_static("sha256")))]
     fn sign(
         py: Python<'_>,
         text: &str,
         key: Py<PyAny>,
         password: Option<&str>,
-        hash_algorithm: &str,
+        hash_algorithm: NameInput,
     ) -> PyResult<Self> {
         let password = password_from_option(password);
-        let hash_algorithm = hash_algorithm_from_name(hash_algorithm)?;
+        let hash_algorithm = hash_algorithm_from_name(hash_algorithm.as_ref())?;
         let signer = secret_signer_from_python(py, key)?;
         let signers = vec![(signer, password)];
         let inner = cleartext_signed_message_from_signers(text, &signers, hash_algorithm)?;

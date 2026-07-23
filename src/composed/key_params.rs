@@ -103,16 +103,16 @@ impl KeyType {
     }
 
     #[staticmethod]
-    fn ecdsa(curve: &str) -> PyResult<Self> {
+    fn ecdsa(curve: NameInput) -> PyResult<Self> {
         Ok(Self {
-            inner: PgpKeyType::ECDSA(curve_from_name(curve)?),
+            inner: PgpKeyType::ECDSA(curve_from_name(curve.as_ref())?),
         })
     }
 
     #[staticmethod]
-    fn ecdh(curve: &str) -> PyResult<Self> {
+    fn ecdh(curve: NameInput) -> PyResult<Self> {
         Ok(Self {
-            inner: PgpKeyType::ECDH(curve_from_name(curve)?),
+            inner: PgpKeyType::ECDH(curve_from_name(curve.as_ref())?),
         })
     }
 
@@ -363,7 +363,7 @@ impl SecretKeyParamsBuilder {
 
     fn preferred_symmetric_algorithms<'py>(
         mut slf: PyRefMut<'py, Self>,
-        values: Vec<String>,
+        values: Vec<NameInput>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         slf.inner
             .preferred_symmetric_algorithms(symmetric_algorithms_from_names(values)?);
@@ -372,7 +372,7 @@ impl SecretKeyParamsBuilder {
 
     fn preferred_hash_algorithms<'py>(
         mut slf: PyRefMut<'py, Self>,
-        values: Vec<String>,
+        values: Vec<NameInput>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         slf.inner
             .preferred_hash_algorithms(hash_algorithms_from_names(values)?);
@@ -381,7 +381,7 @@ impl SecretKeyParamsBuilder {
 
     fn preferred_compression_algorithms<'py>(
         mut slf: PyRefMut<'py, Self>,
-        values: Vec<String>,
+        values: Vec<NameInput>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         slf.inner
             .preferred_compression_algorithms(compression_algorithms_from_names(values)?);
@@ -390,7 +390,7 @@ impl SecretKeyParamsBuilder {
 
     fn preferred_aead_algorithms<'py>(
         mut slf: PyRefMut<'py, Self>,
-        values: Vec<(String, String)>,
+        values: Vec<(NameInput, NameInput)>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         slf.inner
             .preferred_aead_algorithms(aead_algorithm_preferences_from_names(values)?);
