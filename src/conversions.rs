@@ -1,4 +1,36 @@
 use crate::*;
+use pyo3::{Borrowed, types::PyAny};
+
+/// A string-valued rPGP enum or its normalized string spelling.
+///
+/// Native algorithm wrappers expose ``value`` while existing callers may keep
+/// passing strings. This extractor lets the same PyO3 methods accept both.
+#[derive(Clone)]
+pub(crate) struct NameInput(pub(crate) String);
+
+impl NameInput {
+    pub(crate) fn from_static(value: &'static str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl FromPyObject<'_, '_> for NameInput {
+    type Error = PyErr;
+
+    fn extract(object: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
+        if let Ok(value) = object.extract::<String>() {
+            return Ok(Self(value));
+        }
+
+        Ok(Self(object.getattr("value")?.extract()?))
+    }
+}
+
+impl AsRef<str> for NameInput {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
 
 pub(crate) fn password_from_option(password: Option<&str>) -> Password {
     match password {
@@ -24,17 +56,26 @@ pub(crate) fn key_version_number(version: KeyVersion) -> u8 {
 }
 
 pub(crate) fn hash_algorithm_from_name(name: &str) -> PyResult<HashAlgorithm> {
-    match name.to_ascii_lowercase().as_str() {
+    let name = name.to_ascii_lowercase();
+    if let Some(value) = name
+        .strip_prefix("other-")
+        .and_then(|value| value.parse::<u8>().ok())
+    {
+        return Ok(HashAlgorithm::from(value));
+    }
+    match name.as_str() {
+        "none" => Ok(HashAlgorithm::None),
+        "md5" => Ok(HashAlgorithm::Md5),
         "sha1" => Ok(HashAlgorithm::Sha1),
+        "ripemd160" => Ok(HashAlgorithm::Ripemd160),
         "sha224" => Ok(HashAlgorithm::Sha224),
         "sha256" => Ok(HashAlgorithm::Sha256),
         "sha384" => Ok(HashAlgorithm::Sha384),
         "sha512" => Ok(HashAlgorithm::Sha512),
         "sha3-256" | "sha3_256" => Ok(HashAlgorithm::Sha3_256),
         "sha3-512" | "sha3_512" => Ok(HashAlgorithm::Sha3_512),
-        _ => Err(to_py_err(
-            "unsupported hash algorithm; expected 'sha1', 'sha224', 'sha256', 'sha384', 'sha512', 'sha3-256', or 'sha3-512'",
-        )),
+        "private10" => Ok(HashAlgorithm::Private10),
+        _ => Err(to_py_err("unsupported hash algorithm")),
     }
 }
 
@@ -47,8 +88,8 @@ pub(crate) fn required_compression_algorithm_from_name(
 
 pub(crate) fn curve_from_name(name: &str) -> PyResult<ECCCurve> {
     match name.to_ascii_lowercase().as_str() {
-        "curve25519" => Ok(ECCCurve::Curve25519),
-        "ed25519" => Ok(ECCCurve::Ed25519),
+        "curve25519" => Ok(ECCCurve::Curve25519Legacy),
+        "ed25519" => Ok(ECCCurve::Ed25519Legacy),
         "p256" => Ok(ECCCurve::P256),
         "p384" => Ok(ECCCurve::P384),
         "p521" => Ok(ECCCurve::P521),
@@ -74,43 +115,43 @@ pub(crate) fn dsa_key_size_from_bits(bits: u32) -> PyResult<PgpDsaKeySize> {
 }
 
 pub(crate) fn symmetric_algorithms_from_names(
-    values: Vec<String>,
+    values: Vec<NameInput>,
 ) -> PyResult<SmallVec<[SymmetricKeyAlgorithm; 8]>> {
     let mut algorithms = SmallVec::new();
     for value in values {
-        algorithms.push(symmetric_algorithm_from_name(&value)?);
+        algorithms.push(symmetric_algorithm_from_name(value.as_ref())?);
     }
     Ok(algorithms)
 }
 
 pub(crate) fn hash_algorithms_from_names(
-    values: Vec<String>,
+    values: Vec<NameInput>,
 ) -> PyResult<SmallVec<[HashAlgorithm; 8]>> {
     let mut algorithms = SmallVec::new();
     for value in values {
-        algorithms.push(hash_algorithm_from_name(&value)?);
+        algorithms.push(hash_algorithm_from_name(value.as_ref())?);
     }
     Ok(algorithms)
 }
 
 pub(crate) fn compression_algorithms_from_names(
-    values: Vec<String>,
+    values: Vec<NameInput>,
 ) -> PyResult<SmallVec<[CompressionAlgorithm; 8]>> {
     let mut algorithms = SmallVec::new();
     for value in values {
-        algorithms.push(required_compression_algorithm_from_name(&value)?);
+        algorithms.push(required_compression_algorithm_from_name(value.as_ref())?);
     }
     Ok(algorithms)
 }
 
 pub(crate) fn aead_algorithm_preferences_from_names(
-    values: Vec<(String, String)>,
+    values: Vec<(NameInput, NameInput)>,
 ) -> PyResult<SmallVec<[(SymmetricKeyAlgorithm, AeadAlgorithm); 4]>> {
     let mut algorithms = SmallVec::new();
     for (symmetric_algorithm, aead_algorithm) in values {
         algorithms.push((
-            symmetric_algorithm_from_name(&symmetric_algorithm)?,
-            aead_algorithm_from_name(&aead_algorithm)?,
+            symmetric_algorithm_from_name(symmetric_algorithm.as_ref())?,
+            aead_algorithm_from_name(aead_algorithm.as_ref())?,
         ));
     }
     Ok(algorithms)
@@ -118,8 +159,8 @@ pub(crate) fn aead_algorithm_preferences_from_names(
 
 pub(crate) fn curve_name(curve: &ECCCurve) -> &'static str {
     match curve {
-        ECCCurve::Curve25519 => "curve25519",
-        ECCCurve::Ed25519 => "ed25519",
+        ECCCurve::Curve25519Legacy => "curve25519",
+        ECCCurve::Ed25519Legacy => "ed25519",
         ECCCurve::P256 => "p256",
         ECCCurve::P384 => "p384",
         ECCCurve::P521 => "p521",
@@ -243,37 +284,77 @@ pub(crate) fn encryption_version_from_name(name: &str) -> PyResult<EncryptionVer
 }
 
 pub(crate) fn symmetric_algorithm_from_name(name: &str) -> PyResult<SymmetricKeyAlgorithm> {
-    match name.to_ascii_lowercase().as_str() {
+    let name = name.to_ascii_lowercase();
+    if let Some(value) = name
+        .strip_prefix("other-")
+        .and_then(|value| value.parse::<u8>().ok())
+    {
+        return Ok(SymmetricKeyAlgorithm::from(value));
+    }
+    match name.as_str() {
+        "plaintext" => Ok(SymmetricKeyAlgorithm::Plaintext),
+        "idea" => Ok(SymmetricKeyAlgorithm::IDEA),
+        "triple-des" | "tripledes" => Ok(SymmetricKeyAlgorithm::TripleDES),
+        "cast5" => Ok(SymmetricKeyAlgorithm::CAST5),
+        "blowfish" => Ok(SymmetricKeyAlgorithm::Blowfish),
         "aes128" => Ok(SymmetricKeyAlgorithm::AES128),
         "aes192" => Ok(SymmetricKeyAlgorithm::AES192),
         "aes256" => Ok(SymmetricKeyAlgorithm::AES256),
-        _ => Err(to_py_err(
-            "unsupported symmetric algorithm; expected 'aes128', 'aes192', or 'aes256'",
-        )),
+        "twofish" => Ok(SymmetricKeyAlgorithm::Twofish),
+        "camellia128" => Ok(SymmetricKeyAlgorithm::Camellia128),
+        "camellia192" => Ok(SymmetricKeyAlgorithm::Camellia192),
+        "camellia256" => Ok(SymmetricKeyAlgorithm::Camellia256),
+        "private10" => Ok(SymmetricKeyAlgorithm::Private10),
+        _ => Err(to_py_err("unsupported symmetric algorithm")),
     }
 }
 
 pub(crate) fn aead_algorithm_from_name(name: &str) -> PyResult<AeadAlgorithm> {
-    match name.to_ascii_lowercase().as_str() {
+    let name = name.to_ascii_lowercase();
+    if let Some(value) = name
+        .strip_prefix("other-")
+        .and_then(|value| value.parse::<u8>().ok())
+    {
+        return Ok(AeadAlgorithm::from(value));
+    }
+    match name.as_str() {
+        "none" => Ok(AeadAlgorithm::None),
         "eax" => Ok(AeadAlgorithm::Eax),
         "ocb" => Ok(AeadAlgorithm::Ocb),
         "gcm" => Ok(AeadAlgorithm::Gcm),
-        _ => Err(to_py_err(
-            "unsupported AEAD algorithm; expected 'eax', 'ocb', or 'gcm'",
-        )),
+        "private-100" => Ok(AeadAlgorithm::Private100),
+        "private-101" => Ok(AeadAlgorithm::Private101),
+        "private-102" => Ok(AeadAlgorithm::Private102),
+        "private-103" => Ok(AeadAlgorithm::Private103),
+        "private-104" => Ok(AeadAlgorithm::Private104),
+        "private-105" => Ok(AeadAlgorithm::Private105),
+        "private-106" => Ok(AeadAlgorithm::Private106),
+        "private-107" => Ok(AeadAlgorithm::Private107),
+        "private-108" => Ok(AeadAlgorithm::Private108),
+        "private-109" => Ok(AeadAlgorithm::Private109),
+        "private-110" => Ok(AeadAlgorithm::Private110),
+        _ => Err(to_py_err("unsupported AEAD algorithm")),
     }
 }
 
 pub(crate) fn compression_algorithm_from_name(
     name: Option<&str>,
 ) -> PyResult<Option<CompressionAlgorithm>> {
-    match name.map(str::to_ascii_lowercase).as_deref() {
+    let name = name.map(str::to_ascii_lowercase);
+    if let Some(value) = name
+        .as_deref()
+        .and_then(|name| name.strip_prefix("other-"))
+        .and_then(|value| value.parse::<u8>().ok())
+    {
+        return Ok(Some(CompressionAlgorithm::from(value)));
+    }
+    match name.as_deref() {
         None => Ok(None),
+        Some("uncompressed") => Ok(Some(CompressionAlgorithm::Uncompressed)),
         Some("zip") => Ok(Some(CompressionAlgorithm::ZIP)),
         Some("zlib") => Ok(Some(CompressionAlgorithm::ZLIB)),
         Some("bzip2") => Ok(Some(CompressionAlgorithm::BZip2)),
-        _ => Err(to_py_err(
-            "unsupported compression algorithm; expected 'zip', 'zlib', or 'bzip2'",
-        )),
+        Some("private10") => Ok(Some(CompressionAlgorithm::Private10)),
+        _ => Err(to_py_err("unsupported compression algorithm")),
     }
 }

@@ -1,6 +1,4 @@
 use crate::conversions::*;
-use crate::key_params::*;
-use crate::messages::*;
 use crate::*;
 use rsa::traits::PublicKeyParts;
 
@@ -10,17 +8,17 @@ pub(crate) fn parse_message(
     PgpMessage::from_reader(Cursor::new(source))
 }
 
-pub(crate) fn inspect_message_from_source(
+pub(crate) fn message_summary_from_source(
     source: &[u8],
-) -> Result<MessageInfo, pgp::errors::Error> {
+) -> Result<MessageSummary, pgp::errors::Error> {
     let (message, headers) = parse_message(source)?;
-    Ok(message_info_from_parts(message, headers))
+    Ok(message_summary_from_parts(message, headers))
 }
 
-pub(crate) fn message_info_from_ref(
+pub(crate) fn message_summary_from_ref(
     message: &PgpMessage<'_>,
     headers: Option<Headers>,
-) -> MessageInfo {
+) -> MessageSummary {
     let (kind, is_nested) = match message {
         PgpMessage::Literal { is_nested, .. } => ("literal", *is_nested),
         PgpMessage::Compressed { is_nested, .. } => ("compressed", *is_nested),
@@ -28,25 +26,18 @@ pub(crate) fn message_info_from_ref(
         PgpMessage::Encrypted { is_nested, .. } => ("encrypted", *is_nested),
     };
 
-    MessageInfo {
+    MessageSummary {
         kind: kind.to_string(),
         is_nested,
         headers,
     }
 }
 
-pub(crate) fn message_info_from_parts(
+pub(crate) fn message_summary_from_parts(
     message: PgpMessage<'_>,
     headers: Option<Headers>,
-) -> MessageInfo {
-    message_info_from_ref(&message, headers)
-}
-
-pub(crate) fn parse_message_info_from_reader(
-    reader: Cursor<&[u8]>,
-) -> Result<MessageInfo, pgp::errors::Error> {
-    let (message, headers) = PgpMessage::from_reader(reader)?;
-    Ok(message_info_from_parts(message, headers))
+) -> MessageSummary {
+    message_summary_from_ref(&message, headers)
 }
 
 pub(crate) fn prepare_message_for_content(
@@ -126,20 +117,6 @@ pub(crate) fn regular_signature_count_from_source(source: &[u8]) -> PyResult<usi
     }
 }
 
-pub(crate) fn signature_infos_from_source(source: &[u8]) -> PyResult<Vec<SignatureInfo>> {
-    let message = prepare_message_for_content(source).map_err(to_py_err)?;
-    signature_infos_from_signed_message(message)
-}
-
-pub(crate) fn verify_signature_from_source(
-    source: &[u8],
-    key: &SignedPublicKey,
-    index: usize,
-) -> PyResult<SignatureInfo> {
-    let message = prepare_message_for_content(source).map_err(to_py_err)?;
-    verify_message_signature_info(message, key, index)
-}
-
 pub(crate) fn public_key_algorithm_name(algorithm: PgpPublicKeyAlgorithm) -> &'static str {
     match algorithm {
         PgpPublicKeyAlgorithm::RSA => "rsa",
@@ -190,8 +167,8 @@ pub(crate) fn public_params_kind_name(params: &PgpPublicParams) -> &'static str 
 
 pub(crate) fn curve_name_from_ecc_curve(curve: &ECCCurve) -> Option<&'static str> {
     match curve {
-        ECCCurve::Curve25519 => Some("curve25519"),
-        ECCCurve::Ed25519 => Some("ed25519"),
+        ECCCurve::Curve25519Legacy => Some("curve25519"),
+        ECCCurve::Ed25519Legacy => Some("ed25519"),
         ECCCurve::P256 => Some("p256"),
         ECCCurve::P384 => Some("p384"),
         ECCCurve::P521 => Some("p521"),
@@ -205,8 +182,8 @@ pub(crate) fn curve_name_from_ecc_curve(curve: &ECCCurve) -> Option<&'static str
 
 pub(crate) fn curve_bit_length_from_ecc_curve(curve: &ECCCurve) -> Option<u16> {
     match curve {
-        ECCCurve::Curve25519
-        | ECCCurve::Ed25519
+        ECCCurve::Curve25519Legacy
+        | ECCCurve::Ed25519Legacy
         | ECCCurve::P256
         | ECCCurve::BrainpoolP256r1
         | ECCCurve::Secp256k1 => Some(256),
@@ -219,8 +196,8 @@ pub(crate) fn curve_bit_length_from_ecc_curve(curve: &ECCCurve) -> Option<u16> {
 
 pub(crate) fn curve_secret_key_length_from_ecc_curve(curve: &ECCCurve) -> Option<usize> {
     match curve {
-        ECCCurve::Curve25519
-        | ECCCurve::Ed25519
+        ECCCurve::Curve25519Legacy
+        | ECCCurve::Ed25519Legacy
         | ECCCurve::P256
         | ECCCurve::BrainpoolP256r1
         | ECCCurve::Secp256k1 => Some(32),
@@ -290,13 +267,13 @@ pub(crate) fn public_params_info_from_params(params: &PgpPublicParams) -> Public
             }
         },
         PgpPublicParams::ECDH(params) => match params {
-            PgpEcdhPublicParams::Curve25519 {
+            PgpEcdhPublicParams::Curve25519Legacy {
                 hash,
                 alg_sym,
                 ecdh_kdf_type,
                 ..
             } => {
-                set_curve_metadata(&mut info, &ECCCurve::Curve25519);
+                set_curve_metadata(&mut info, &ECCCurve::Curve25519Legacy);
                 info.is_supported = Some(true);
                 info.kdf_hash_algorithm = Some(normalized_algorithm_name(hash));
                 info.kdf_symmetric_algorithm = Some(normalized_algorithm_name(alg_sym));
@@ -345,7 +322,7 @@ pub(crate) fn public_params_info_from_params(params: &PgpPublicParams) -> Public
         },
         PgpPublicParams::EdDSALegacy(params) => match params {
             PgpEddsaLegacyPublicParams::Ed25519 { .. } => {
-                set_curve_metadata(&mut info, &ECCCurve::Ed25519);
+                set_curve_metadata(&mut info, &ECCCurve::Ed25519Legacy);
                 info.is_supported = Some(true);
             }
             PgpEddsaLegacyPublicParams::Unsupported { curve, .. } => {
@@ -354,11 +331,11 @@ pub(crate) fn public_params_info_from_params(params: &PgpPublicParams) -> Public
             }
         },
         PgpPublicParams::Ed25519(_) => {
-            set_curve_metadata(&mut info, &ECCCurve::Ed25519);
+            set_curve_metadata(&mut info, &ECCCurve::Ed25519Legacy);
             info.is_supported = Some(true);
         }
         PgpPublicParams::X25519(_) => {
-            set_curve_metadata(&mut info, &ECCCurve::Curve25519);
+            set_curve_metadata(&mut info, &ECCCurve::Curve25519Legacy);
             info.is_supported = Some(true);
         }
         _ => {}
@@ -464,8 +441,8 @@ pub(crate) fn signature_salt(signature: &Signature) -> Option<Vec<u8>> {
         })
 }
 
-pub(crate) fn key_flags_info_from_key_flags(key_flags: &PgpKeyFlags) -> KeyFlagsInfo {
-    KeyFlagsInfo {
+pub(crate) fn key_flags_from_key_flags(key_flags: &PgpKeyFlags) -> KeyFlags {
+    KeyFlags {
         certify: key_flags.certify(),
         sign: key_flags.sign(),
         encrypt_communications: key_flags.encrypt_comms(),
@@ -479,17 +456,15 @@ pub(crate) fn key_flags_info_from_key_flags(key_flags: &PgpKeyFlags) -> KeyFlags
     }
 }
 
-pub(crate) fn features_info_from_features(features: &PgpFeatures) -> FeaturesInfo {
-    FeaturesInfo {
+pub(crate) fn features_from_features(features: &PgpFeatures) -> Features {
+    Features {
         seipd_v1: features.seipd_v1(),
         seipd_v2: features.seipd_v2(),
     }
 }
 
-pub(crate) fn signature_notation_info_from_notation(
-    notation: &PgpNotation,
-) -> SignatureNotationInfo {
-    SignatureNotationInfo {
+pub(crate) fn notation_from_notation(notation: &PgpNotation) -> Notation {
+    Notation {
         human_readable: notation.readable,
         name: notation.name.to_vec(),
         value: notation.value.to_vec(),
@@ -510,195 +485,14 @@ pub(crate) fn revocation_key_class_name(class: PgpRevocationKeyClass) -> &'stati
     }
 }
 
-pub(crate) fn revocation_key_info_from_revocation_key(
+pub(crate) fn revocation_key_from_revocation_key(
     revocation_key: &PgpRevocationKey,
-) -> RevocationKeyInfo {
-    RevocationKeyInfo {
+) -> RevocationKey {
+    RevocationKey {
         class_id: revocation_key_class_id(revocation_key.class),
         class_name: revocation_key_class_name(revocation_key.class).to_string(),
         public_key_algorithm: public_key_algorithm_name(revocation_key.algorithm).to_string(),
         fingerprint: revocation_key.fingerprint.to_vec(),
-    }
-}
-
-pub(crate) fn signature_info_from_signature(
-    signature: &Signature,
-    is_one_pass: bool,
-) -> SignatureInfo {
-    let key_flags = signature.key_flags();
-    SignatureInfo {
-        version: signature_version_number(signature.version()),
-        signature_type: signature.typ().map(signature_type_name),
-        hash_algorithm: signature.hash_alg().map(|algorithm| algorithm.to_string()),
-        public_key_algorithm: signature
-            .config()
-            .map(|config| public_key_algorithm_name(config.pub_alg).to_string()),
-        issuer_key_ids: signature
-            .issuer_key_id()
-            .iter()
-            .map(|key_id| key_id.to_string())
-            .collect(),
-        issuer_fingerprints: signature
-            .issuer_fingerprint()
-            .iter()
-            .map(|fingerprint| fingerprint.to_string())
-            .collect(),
-        creation_time: signature.created().map(|timestamp| timestamp.as_secs()),
-        key_expiration_seconds: signature
-            .key_expiration_time()
-            .map(|duration| duration.as_secs()),
-        signature_expiration_seconds: signature
-            .signature_expiration_time()
-            .map(|duration| duration.as_secs()),
-        revocation_reason_code: signature
-            .revocation_reason_code()
-            .map(|code| (*code).into()),
-        revocation_reason: signature
-            .revocation_reason_string()
-            .map(|reason| String::from_utf8_lossy(reason.as_ref()).into_owned()),
-        signer_user_id: signature
-            .signers_userid()
-            .map(|user_id| String::from_utf8_lossy(user_id.as_ref()).into_owned()),
-        signed_hash_value: signature
-            .signed_hash_value()
-            .map(|signed_hash_value| signed_hash_value.to_vec()),
-        salt: signature_salt(signature),
-        preferred_symmetric_algorithms: symmetric_algorithm_names(
-            signature.preferred_symmetric_algs(),
-        ),
-        preferred_hash_algorithms: hash_algorithm_names(signature.preferred_hash_algs()),
-        preferred_compression_algorithms: compression_algorithm_names(
-            signature.preferred_compression_algs(),
-        ),
-        preferred_aead_algorithms: aead_algorithm_preference_names(signature.preferred_aead_algs()),
-        preferred_key_server: signature.preferred_key_server().map(str::to_owned),
-        notations: signature
-            .notations()
-            .into_iter()
-            .map(signature_notation_info_from_notation)
-            .collect(),
-        revocation_key: signature
-            .revocation_key()
-            .map(revocation_key_info_from_revocation_key),
-        policy_uri: signature.policy_uri().map(str::to_owned),
-        is_revocable: signature.is_revocable(),
-        exportable_certification: signature.exportable_certification(),
-        key_flags: key_flags_info_from_key_flags(&key_flags),
-        features: signature.features().map(features_info_from_features),
-        embedded_signature: signature
-            .embedded_signature()
-            .map(|embedded| Box::new(signature_info_from_signature(embedded, false))),
-        is_one_pass,
-    }
-}
-
-pub(crate) fn signature_info_from_full_signature(signature: &FullSignaturePacket) -> SignatureInfo {
-    let is_one_pass = matches!(signature, FullSignaturePacket::Ops { .. });
-    signature_info_from_signature(signature.signature(), is_one_pass)
-}
-
-pub(crate) fn direct_signature_infos_from_details(
-    details: &pgp::composed::SignedKeyDetails,
-) -> Vec<SignatureInfo> {
-    details
-        .direct_signatures
-        .iter()
-        .map(|signature| signature_info_from_signature(signature, false))
-        .collect::<Vec<_>>()
-}
-
-pub(crate) fn revocation_signature_infos_from_details(
-    details: &pgp::composed::SignedKeyDetails,
-) -> Vec<SignatureInfo> {
-    details
-        .revocation_signatures
-        .iter()
-        .map(|signature| signature_info_from_signature(signature, false))
-        .collect::<Vec<_>>()
-}
-
-pub(crate) fn user_binding_info_from_signed_user(user: &pgp::types::SignedUser) -> UserBindingInfo {
-    UserBindingInfo {
-        user_id: String::from_utf8_lossy(user.id.id()).into_owned(),
-        is_primary: user.is_primary(),
-        signatures: user
-            .signatures
-            .iter()
-            .map(|signature| signature_info_from_signature(signature, false))
-            .collect::<Vec<_>>(),
-    }
-}
-
-pub(crate) fn user_binding_infos_from_details(
-    details: &pgp::composed::SignedKeyDetails,
-) -> Vec<UserBindingInfo> {
-    details
-        .users
-        .iter()
-        .map(user_binding_info_from_signed_user)
-        .collect::<Vec<_>>()
-}
-
-pub(crate) fn user_attribute_binding_info_from_signed_user_attribute(
-    attribute: &pgp::types::SignedUserAttribute,
-) -> UserAttributeBindingInfo {
-    UserAttributeBindingInfo {
-        user_attribute: UserAttribute {
-            inner: attribute.attr.clone(),
-        },
-        signatures: attribute
-            .signatures
-            .iter()
-            .map(|signature| signature_info_from_signature(signature, false))
-            .collect::<Vec<_>>(),
-    }
-}
-
-pub(crate) fn user_attribute_binding_infos_from_details(
-    details: &pgp::composed::SignedKeyDetails,
-) -> Vec<UserAttributeBindingInfo> {
-    details
-        .user_attributes
-        .iter()
-        .map(user_attribute_binding_info_from_signed_user_attribute)
-        .collect::<Vec<_>>()
-}
-
-pub(crate) fn subkey_binding_info_from_signed_public_subkey(
-    subkey: &SignedPublicSubKey,
-) -> SubkeyBindingInfo {
-    SubkeyBindingInfo {
-        fingerprint: subkey.key.fingerprint().to_string(),
-        key_id: subkey.key.legacy_key_id().to_string(),
-        version: key_version_number(subkey.key.version()),
-        created_at: subkey.key.created_at().as_secs(),
-        public_key_algorithm: public_key_algorithm_name(subkey.key.algorithm()).to_string(),
-        public_params: public_params_info_from_params(subkey.key.public_params()),
-        packet_version: subkey.key.packet_header_version(),
-        signatures: subkey
-            .signatures
-            .iter()
-            .map(|signature| signature_info_from_signature(signature, false))
-            .collect::<Vec<_>>(),
-    }
-}
-
-pub(crate) fn subkey_binding_info_from_signed_secret_subkey(
-    subkey: &SignedSecretSubKey,
-) -> SubkeyBindingInfo {
-    SubkeyBindingInfo {
-        fingerprint: subkey.key.public_key().fingerprint().to_string(),
-        key_id: subkey.key.public_key().legacy_key_id().to_string(),
-        version: key_version_number(subkey.key.version()),
-        created_at: subkey.key.created_at().as_secs(),
-        public_key_algorithm: public_key_algorithm_name(subkey.key.algorithm()).to_string(),
-        public_params: public_params_info_from_params(subkey.key.public_params()),
-        packet_version: subkey.key.packet_header_version(),
-        signatures: subkey
-            .signatures
-            .iter()
-            .map(|signature| signature_info_from_signature(signature, false))
-            .collect::<Vec<_>>(),
     }
 }
 
@@ -717,16 +511,10 @@ pub(crate) fn decrypted_signature_from_full_signature(
     }
 }
 
-pub(crate) fn signature_info_from_decrypted_signature(
-    signature: &DecryptedSignature,
-) -> SignatureInfo {
-    signature_info_from_signature(&signature.signature, signature.is_one_pass)
-}
-
 /// Decoded RFC 9580 key-flags subpacket metadata.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.packet", from_py_object)]
 #[derive(Clone, Copy)]
-pub(crate) struct KeyFlagsInfo {
+pub(crate) struct KeyFlags {
     pub(crate) certify: bool,
     pub(crate) sign: bool,
     pub(crate) encrypt_communications: bool,
@@ -740,7 +528,7 @@ pub(crate) struct KeyFlagsInfo {
 }
 
 #[pymethods]
-impl KeyFlagsInfo {
+impl KeyFlags {
     /// Whether the key may certify other keys and user IDs.
     #[getter]
     fn certify(&self) -> bool {
@@ -803,7 +591,7 @@ impl KeyFlagsInfo {
 
     fn __repr__(&self) -> String {
         format!(
-            "KeyFlagsInfo(certify={}, sign={}, encrypt_communications={}, encrypt_storage={}, authenticate={})",
+            "KeyFlags(certify={}, sign={}, encrypt_communications={}, encrypt_storage={}, authenticate={})",
             self.certify,
             self.sign,
             self.encrypt_communications,
@@ -813,7 +601,7 @@ impl KeyFlagsInfo {
     }
 }
 
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.packet", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct UserAttribute {
     pub(crate) inner: PgpUserAttribute,
@@ -852,6 +640,10 @@ impl UserAttribute {
         user_attribute_image_format(&self.inner)
     }
 
+    fn to_bytes(&self) -> PyResult<Vec<u8>> {
+        crate::serialization::serialize_packet_with_header(&self.inner)
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "UserAttribute(kind='{}', data_len={})",
@@ -861,47 +653,16 @@ impl UserAttribute {
     }
 }
 
-/// A signed user attribute and its attached certification self-signatures.
-#[pyclass(module = "openpgp", from_py_object)]
-#[derive(Clone)]
-pub(crate) struct UserAttributeBindingInfo {
-    pub(crate) user_attribute: UserAttribute,
-    pub(crate) signatures: Vec<SignatureInfo>,
-}
-
-#[pymethods]
-impl UserAttributeBindingInfo {
-    /// The underlying user-attribute packet metadata.
-    #[getter]
-    fn user_attribute(&self) -> UserAttribute {
-        self.user_attribute.clone()
-    }
-
-    /// Metadata for every certification signature attached to this user attribute.
-    #[getter]
-    fn signatures(&self) -> Vec<SignatureInfo> {
-        self.signatures.clone()
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "UserAttributeBindingInfo(kind='{}', signature_count={})",
-            self.user_attribute.kind(),
-            self.signatures.len()
-        )
-    }
-}
-
 /// Decoded RFC 9580 Features subpacket metadata.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.packet", from_py_object)]
 #[derive(Clone, Copy)]
-pub(crate) struct FeaturesInfo {
+pub(crate) struct Features {
     pub(crate) seipd_v1: bool,
     pub(crate) seipd_v2: bool,
 }
 
 #[pymethods]
-impl FeaturesInfo {
+impl Features {
     /// Whether the issuer advertises support for SEIPD v1 packets.
     #[getter]
     fn seipd_v1(&self) -> bool {
@@ -916,14 +677,14 @@ impl FeaturesInfo {
 
     fn __repr__(&self) -> String {
         format!(
-            "FeaturesInfo(seipd_v1={}, seipd_v2={})",
+            "Features(seipd_v1={}, seipd_v2={})",
             self.seipd_v1, self.seipd_v2
         )
     }
 }
 
 /// Structured `KeyDetails.public_params()` metadata for a key packet.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.types", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PublicParamsInfo {
     pub(crate) kind: String,
@@ -1022,133 +783,17 @@ impl PublicParamsInfo {
     }
 }
 
-/// A subkey and its attached binding or revocation signatures.
-#[pyclass(module = "openpgp", from_py_object)]
-#[derive(Clone)]
-pub(crate) struct SubkeyBindingInfo {
-    pub(crate) fingerprint: String,
-    pub(crate) key_id: String,
-    pub(crate) version: u8,
-    pub(crate) created_at: u32,
-    pub(crate) public_key_algorithm: String,
-    pub(crate) public_params: PublicParamsInfo,
-    pub(crate) packet_version: PgpPacketHeaderVersion,
-    pub(crate) signatures: Vec<SignatureInfo>,
-}
-
-#[pymethods]
-impl SubkeyBindingInfo {
-    /// The RFC 9580 fingerprint of the subkey packet.
-    #[getter]
-    fn fingerprint(&self) -> String {
-        self.fingerprint.clone()
-    }
-
-    /// The legacy key identifier of the subkey packet.
-    #[getter]
-    fn key_id(&self) -> String {
-        self.key_id.clone()
-    }
-
-    /// The OpenPGP key-packet version number of this subkey.
-    #[getter]
-    fn version(&self) -> u8 {
-        self.version
-    }
-
-    /// The subkey packet's creation time as seconds since the Unix epoch.
-    #[getter]
-    fn created_at(&self) -> u32 {
-        self.created_at
-    }
-
-    /// The subkey packet's public-key algorithm.
-    #[getter]
-    fn public_key_algorithm(&self) -> String {
-        self.public_key_algorithm.clone()
-    }
-
-    /// Structured algorithm-specific public-key metadata from `KeyDetails.public_params()`.
-    #[getter]
-    fn public_params(&self) -> PublicParamsInfo {
-        self.public_params.clone()
-    }
-
-    /// The RFC 9580 packet-header framing used by this subkey packet.
-    #[getter]
-    fn packet_version(&self) -> PyPacketHeaderVersion {
-        PyPacketHeaderVersion {
-            inner: self.packet_version,
-        }
-    }
-
-    /// Metadata for every binding or revocation signature attached to this subkey.
-    #[getter]
-    fn signatures(&self) -> Vec<SignatureInfo> {
-        self.signatures.clone()
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "SubkeyBindingInfo(fingerprint='{}', key_id='{}', packet_version='{}', signature_count={})",
-            self.fingerprint,
-            self.key_id,
-            packet_header_version_name(self.packet_version),
-            self.signatures.len()
-        )
-    }
-}
-
-/// A user ID and its attached certification self-signatures.
-#[pyclass(module = "openpgp", from_py_object)]
-#[derive(Clone)]
-pub(crate) struct UserBindingInfo {
-    pub(crate) user_id: String,
-    pub(crate) is_primary: bool,
-    pub(crate) signatures: Vec<SignatureInfo>,
-}
-
-#[pymethods]
-impl UserBindingInfo {
-    /// The user ID bytes decoded lossily as UTF-8.
-    #[getter]
-    fn user_id(&self) -> String {
-        self.user_id.clone()
-    }
-
-    /// Whether any attached certification marks this as the primary user ID.
-    #[getter]
-    fn is_primary(&self) -> bool {
-        self.is_primary
-    }
-
-    /// Metadata for every certification signature attached to this user ID.
-    #[getter]
-    fn signatures(&self) -> Vec<SignatureInfo> {
-        self.signatures.clone()
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "UserBindingInfo(user_id={:?}, is_primary={}, signature_count={})",
-            self.user_id,
-            self.is_primary,
-            self.signatures.len()
-        )
-    }
-}
-
 /// Decoded RFC 9580 signature-notation metadata.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.packet", from_py_object)]
 #[derive(Clone)]
-pub(crate) struct SignatureNotationInfo {
+pub(crate) struct Notation {
     pub(crate) human_readable: bool,
     pub(crate) name: Vec<u8>,
     pub(crate) value: Vec<u8>,
 }
 
 #[pymethods]
-impl SignatureNotationInfo {
+impl Notation {
     /// Whether the notation value is intended to be human-readable text.
     #[getter]
     fn human_readable(&self) -> bool {
@@ -1169,7 +814,7 @@ impl SignatureNotationInfo {
 
     fn __repr__(&self) -> String {
         format!(
-            "SignatureNotationInfo(human_readable={}, name_len={}, value_len={})",
+            "Notation(human_readable={}, name_len={}, value_len={})",
             self.human_readable,
             self.name.len(),
             self.value.len()
@@ -1180,9 +825,9 @@ impl SignatureNotationInfo {
 /// Decoded designated-revocation-key metadata from a signature.
 ///
 /// This reflects the deprecated RFC 9580 revocation-key subpacket, when present.
-#[pyclass(module = "openpgp", from_py_object)]
+#[pyclass(module = "openpgp.types", from_py_object)]
 #[derive(Clone)]
-pub(crate) struct RevocationKeyInfo {
+pub(crate) struct RevocationKey {
     pub(crate) class_id: u8,
     pub(crate) class_name: String,
     pub(crate) public_key_algorithm: String,
@@ -1190,7 +835,7 @@ pub(crate) struct RevocationKeyInfo {
 }
 
 #[pymethods]
-impl RevocationKeyInfo {
+impl RevocationKey {
     /// The numeric revocation-key class octet.
     #[getter]
     fn class_id(&self) -> u8 {
@@ -1217,7 +862,7 @@ impl RevocationKeyInfo {
 
     fn __repr__(&self) -> String {
         format!(
-            "RevocationKeyInfo(class_name='{}', public_key_algorithm='{}', fingerprint_len={})",
+            "RevocationKey(class_name='{}', public_key_algorithm='{}', fingerprint_len={})",
             self.class_name,
             self.public_key_algorithm,
             self.fingerprint.len()
@@ -1225,449 +870,9 @@ impl RevocationKeyInfo {
     }
 }
 
-/// Metadata extracted from an OpenPGP data signature packet.
-///
-/// The fields mirror the RFC 9580 signature packet configuration, including issuer subpackets,
-/// the 16-bit signed hash prefix, version-6 salts, and certificate self-signature metadata such
-/// as key flags, features, preferred algorithm lists, notations, and revocation-key metadata when
-/// present.
-#[pyclass(module = "openpgp", from_py_object)]
 #[derive(Clone)]
-pub(crate) struct SignatureInfo {
-    pub(crate) version: u8,
-    pub(crate) signature_type: Option<String>,
-    pub(crate) hash_algorithm: Option<String>,
-    pub(crate) public_key_algorithm: Option<String>,
-    pub(crate) issuer_key_ids: Vec<String>,
-    pub(crate) issuer_fingerprints: Vec<String>,
-    pub(crate) creation_time: Option<u32>,
-    pub(crate) key_expiration_seconds: Option<u32>,
-    pub(crate) signature_expiration_seconds: Option<u32>,
-    pub(crate) revocation_reason_code: Option<u8>,
-    pub(crate) revocation_reason: Option<String>,
-    pub(crate) signer_user_id: Option<String>,
-    pub(crate) signed_hash_value: Option<Vec<u8>>,
-    pub(crate) salt: Option<Vec<u8>>,
-    pub(crate) preferred_symmetric_algorithms: Vec<String>,
-    pub(crate) preferred_hash_algorithms: Vec<String>,
-    pub(crate) preferred_compression_algorithms: Vec<String>,
-    pub(crate) preferred_aead_algorithms: Vec<(String, String)>,
-    pub(crate) preferred_key_server: Option<String>,
-    pub(crate) notations: Vec<SignatureNotationInfo>,
-    pub(crate) revocation_key: Option<RevocationKeyInfo>,
-    pub(crate) policy_uri: Option<String>,
-    pub(crate) is_revocable: bool,
-    pub(crate) exportable_certification: bool,
-    pub(crate) key_flags: KeyFlagsInfo,
-    pub(crate) features: Option<FeaturesInfo>,
-    pub(crate) embedded_signature: Option<Box<SignatureInfo>>,
-    pub(crate) is_one_pass: bool,
-}
-
-#[pymethods]
-impl SignatureInfo {
-    /// The signature packet version number.
-    #[getter]
-    fn version(&self) -> u8 {
-        self.version
-    }
-
-    /// The RFC 9580 signature type name, if this packet used a known signature format.
-    #[getter]
-    fn signature_type(&self) -> Option<String> {
-        self.signature_type.clone()
-    }
-
-    /// The declared hash algorithm name, if this packet used a known signature format.
-    #[getter]
-    fn hash_algorithm(&self) -> Option<String> {
-        self.hash_algorithm.clone()
-    }
-
-    /// The declared public-key algorithm name, if this packet used a known signature format.
-    #[getter]
-    fn public_key_algorithm(&self) -> Option<String> {
-        self.public_key_algorithm.clone()
-    }
-
-    /// Any issuer key IDs from issuer-related subpackets.
-    #[getter]
-    fn issuer_key_ids(&self) -> Vec<String> {
-        self.issuer_key_ids.clone()
-    }
-
-    /// Any issuer fingerprints from issuer fingerprint subpackets.
-    #[getter]
-    fn issuer_fingerprints(&self) -> Vec<String> {
-        self.issuer_fingerprints.clone()
-    }
-
-    /// The signature creation time as seconds since the Unix epoch, if present.
-    #[getter]
-    fn creation_time(&self) -> Option<u32> {
-        self.creation_time
-    }
-
-    /// The key-expiration interval declared by this signature, in seconds from creation time.
-    ///
-    /// This reflects metadata carried by a self-signature or binding signature, not a resolved
-    /// top-level key expiry for the certificate as a whole.
-    #[getter]
-    fn key_expiration_seconds(&self) -> Option<u32> {
-        self.key_expiration_seconds
-    }
-
-    /// The signature expiration interval in seconds, if present.
-    #[getter]
-    fn signature_expiration_seconds(&self) -> Option<u32> {
-        self.signature_expiration_seconds
-    }
-
-    /// The numeric RFC 9580 revocation-reason code carried by this signature, if present.
-    #[getter]
-    fn revocation_reason_code(&self) -> Option<u8> {
-        self.revocation_reason_code
-    }
-
-    /// The revocation-reason text carried by this signature, lossily decoded as UTF-8.
-    #[getter]
-    fn revocation_reason(&self) -> Option<String> {
-        self.revocation_reason.clone()
-    }
-
-    /// The signer's declared user ID from hashed subpackets, lossily decoded as UTF-8.
-    #[getter]
-    fn signer_user_id(&self) -> Option<String> {
-        self.signer_user_id.clone()
-    }
-
-    /// The two-octet signed hash prefix stored in the signature packet, if available.
-    #[getter]
-    fn signed_hash_value(&self) -> Option<Vec<u8>> {
-        self.signed_hash_value.clone()
-    }
-
-    /// The RFC 9580 version-6 signature salt, if this is a version-6 signature.
-    #[getter]
-    fn salt(&self) -> Option<Vec<u8>> {
-        self.salt.clone()
-    }
-
-    /// Preferred symmetric algorithms advertised by this signature, normalized to lower-case.
-    #[getter]
-    fn preferred_symmetric_algorithms(&self) -> Vec<String> {
-        self.preferred_symmetric_algorithms.clone()
-    }
-
-    /// Preferred hash algorithms advertised by this signature, normalized to lower-case.
-    #[getter]
-    fn preferred_hash_algorithms(&self) -> Vec<String> {
-        self.preferred_hash_algorithms.clone()
-    }
-
-    /// Preferred compression algorithms advertised by this signature, normalized to lower-case.
-    #[getter]
-    fn preferred_compression_algorithms(&self) -> Vec<String> {
-        self.preferred_compression_algorithms.clone()
-    }
-
-    /// Preferred AEAD algorithm pairs advertised by this signature, normalized to lower-case.
-    #[getter]
-    fn preferred_aead_algorithms(&self) -> Vec<(String, String)> {
-        self.preferred_aead_algorithms.clone()
-    }
-
-    /// The preferred key-server URI advertised by this signature, if present.
-    #[getter]
-    fn preferred_key_server(&self) -> Option<String> {
-        self.preferred_key_server.clone()
-    }
-
-    /// Any notation-data subpackets carried by the signature.
-    #[getter]
-    fn notations(&self) -> Vec<SignatureNotationInfo> {
-        self.notations.clone()
-    }
-
-    /// The deprecated designated-revocation-key subpacket, if present.
-    #[getter]
-    fn revocation_key(&self) -> Option<RevocationKeyInfo> {
-        self.revocation_key.clone()
-    }
-
-    /// The signature policy URI advertised by this signature, if present.
-    #[getter]
-    fn policy_uri(&self) -> Option<String> {
-        self.policy_uri.clone()
-    }
-
-    /// Whether this signature says the certified object may later be revoked.
-    #[getter]
-    fn is_revocable(&self) -> bool {
-        self.is_revocable
-    }
-
-    /// Whether this certification signature is exportable to other implementations.
-    #[getter]
-    fn exportable_certification(&self) -> bool {
-        self.exportable_certification
-    }
-
-    /// Decoded RFC 9580 key-flag bits advertised by this signature.
-    #[getter]
-    fn key_flags(&self) -> KeyFlagsInfo {
-        self.key_flags
-    }
-
-    /// Decoded RFC 9580 feature-advertisement bits, if the signature carries them.
-    #[getter]
-    fn features(&self) -> Option<FeaturesInfo> {
-        self.features
-    }
-
-    /// An embedded signature, such as the primary-key binding on a signing-capable subkey.
-    #[getter]
-    fn embedded_signature(&self) -> Option<SignatureInfo> {
-        self.embedded_signature.as_deref().cloned()
-    }
-
-    /// Whether the signature originated from a one-pass signature packet.
-    #[getter]
-    fn is_one_pass(&self) -> bool {
-        self.is_one_pass
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "SignatureInfo(version={}, signature_type={:?}, hash_algorithm={:?}, is_one_pass={})",
-            self.version, self.signature_type, self.hash_algorithm, self.is_one_pass
-        )
-    }
-}
-
-/// Lightweight metadata about an OpenPGP message.
-#[pyclass(module = "openpgp", from_py_object)]
-#[derive(Clone)]
-pub(crate) struct MessageInfo {
+pub(crate) struct MessageSummary {
     pub(crate) kind: String,
     pub(crate) is_nested: bool,
     pub(crate) headers: Option<Headers>,
-}
-
-#[pymethods]
-impl MessageInfo {
-    /// The top-level message kind: literal, compressed, signed, or encrypted.
-    #[getter]
-    fn kind(&self) -> String {
-        self.kind.clone()
-    }
-
-    /// Whether this message was nested inside another message layer.
-    #[getter]
-    fn is_nested(&self) -> bool {
-        self.is_nested
-    }
-
-    /// ASCII-armor headers if the message was parsed from armor.
-    #[getter]
-    fn headers(&self) -> Option<Headers> {
-        self.headers.clone()
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "MessageInfo(kind='{}', is_nested={})",
-            self.kind, self.is_nested
-        )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pgp::composed::SignedKeyDetails;
-    use pgp::packet::Notation;
-    use pgp::packet::RevocationCode;
-    use pgp::packet::{Subpacket, SubpacketData};
-    use pgp::types::{RevocationKey, RevocationKeyClass, SignatureBytes};
-
-    #[test]
-    fn signature_info_exposes_key_expiration_seconds() {
-        let signature = Signature::v4(
-            PacketHeader::from_parts(
-                PgpPacketHeaderVersion::New,
-                Tag::Signature,
-                PacketLength::Fixed(0),
-            )
-            .expect("signature header"),
-            SignatureType::Key,
-            PgpPublicKeyAlgorithm::RSA,
-            HashAlgorithm::Sha256,
-            [0, 0],
-            SignatureBytes::Mpis(vec![]),
-            vec![
-                Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::from_secs(
-                    1_700_000_000,
-                )))
-                .expect("creation subpacket"),
-                Subpacket::regular(SubpacketData::KeyExpirationTime(
-                    pgp::types::Duration::from_secs(86_400),
-                ))
-                .expect("key expiration subpacket"),
-            ],
-            vec![],
-        );
-
-        let info = signature_info_from_signature(&signature, false);
-
-        assert_eq!(info.key_expiration_seconds, Some(86_400));
-        assert_eq!(info.key_expiration_seconds(), Some(86_400));
-    }
-
-    #[test]
-    fn signature_info_exposes_policy_metadata() {
-        let signature = Signature::v4(
-            PacketHeader::from_parts(
-                PgpPacketHeaderVersion::New,
-                Tag::Signature,
-                PacketLength::Fixed(0),
-            )
-            .expect("signature header"),
-            SignatureType::CertPositive,
-            PgpPublicKeyAlgorithm::RSA,
-            HashAlgorithm::Sha256,
-            [0, 0],
-            SignatureBytes::Mpis(vec![]),
-            vec![
-                Subpacket::regular(SubpacketData::PreferredKeyServer(
-                    "https://keys.example.test".to_string(),
-                ))
-                .expect("preferred key server subpacket"),
-                Subpacket::regular(SubpacketData::PolicyURI(
-                    "https://policy.example.test".to_string(),
-                ))
-                .expect("policy uri subpacket"),
-                Subpacket::regular(SubpacketData::Revocable(false)).expect("revocable subpacket"),
-                Subpacket::regular(SubpacketData::ExportableCertification(false))
-                    .expect("exportable certification subpacket"),
-            ],
-            vec![],
-        );
-
-        let info = signature_info_from_signature(&signature, false);
-
-        assert_eq!(
-            info.preferred_key_server(),
-            Some("https://keys.example.test".to_string())
-        );
-        assert_eq!(
-            info.policy_uri(),
-            Some("https://policy.example.test".to_string())
-        );
-        assert!(!info.is_revocable());
-        assert!(!info.exportable_certification());
-    }
-
-    #[test]
-    fn signature_info_exposes_revocation_reason_metadata() {
-        let signature = Signature::v4(
-            PacketHeader::from_parts(
-                PgpPacketHeaderVersion::New,
-                Tag::Signature,
-                PacketLength::Fixed(0),
-            )
-            .expect("signature header"),
-            SignatureType::KeyRevocation,
-            PgpPublicKeyAlgorithm::RSA,
-            HashAlgorithm::Sha256,
-            [0, 0],
-            SignatureBytes::Mpis(vec![]),
-            vec![
-                Subpacket::regular(SubpacketData::RevocationReason(
-                    RevocationCode::KeyRetired,
-                    b"superseded".as_slice().into(),
-                ))
-                .expect("revocation reason subpacket"),
-            ],
-            vec![],
-        );
-
-        let info = signature_info_from_signature(&signature, false);
-
-        assert_eq!(info.revocation_reason_code(), Some(3));
-        assert_eq!(info.revocation_reason(), Some("superseded".to_string()));
-    }
-
-    #[test]
-    fn signature_info_exposes_notation_and_revocation_key_metadata() {
-        let signature = Signature::v4(
-            PacketHeader::from_parts(
-                PgpPacketHeaderVersion::New,
-                Tag::Signature,
-                PacketLength::Fixed(0),
-            )
-            .expect("signature header"),
-            SignatureType::Key,
-            PgpPublicKeyAlgorithm::RSA,
-            HashAlgorithm::Sha256,
-            [0, 0],
-            SignatureBytes::Mpis(vec![]),
-            vec![
-                Subpacket::regular(SubpacketData::Notation(Notation {
-                    readable: true,
-                    name: b"example@rpgp-py".as_slice().into(),
-                    value: b"binding".as_slice().into(),
-                }))
-                .expect("notation subpacket"),
-                Subpacket::regular(SubpacketData::RevocationKey(RevocationKey::new(
-                    RevocationKeyClass::Sensitive,
-                    PgpPublicKeyAlgorithm::Ed25519,
-                    &[0xAB; 20],
-                )))
-                .expect("revocation key subpacket"),
-            ],
-            vec![],
-        );
-
-        let info = signature_info_from_signature(&signature, false);
-        let notations = info.notations();
-        let revocation_key = info.revocation_key().expect("revocation key");
-
-        assert_eq!(notations.len(), 1);
-        assert!(notations[0].human_readable());
-        assert_eq!(notations[0].name(), b"example@rpgp-py".to_vec());
-        assert_eq!(notations[0].value(), b"binding".to_vec());
-        assert_eq!(revocation_key.class_id(), 0xC0);
-        assert_eq!(revocation_key.class_name(), "sensitive".to_string());
-        assert_eq!(revocation_key.public_key_algorithm(), "ed25519".to_string());
-        assert_eq!(revocation_key.fingerprint(), vec![0xAB; 20]);
-    }
-
-    #[test]
-    fn revocation_signature_infos_exposes_key_revocation_signatures() {
-        let revocation = Signature::v4(
-            PacketHeader::from_parts(
-                PgpPacketHeaderVersion::New,
-                Tag::Signature,
-                PacketLength::Fixed(0),
-            )
-            .expect("signature header"),
-            SignatureType::KeyRevocation,
-            PgpPublicKeyAlgorithm::RSA,
-            HashAlgorithm::Sha256,
-            [0, 0],
-            SignatureBytes::Mpis(vec![]),
-            vec![],
-            vec![],
-        );
-        let details = SignedKeyDetails::new(vec![revocation], vec![], vec![], vec![]);
-
-        let infos = revocation_signature_infos_from_details(&details);
-
-        assert_eq!(infos.len(), 1);
-        assert_eq!(
-            infos[0].signature_type(),
-            Some("key-revocation".to_string())
-        );
-    }
 }

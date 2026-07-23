@@ -1,11 +1,24 @@
 import io
 import json
+import os
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Any, TypedDict, cast
 
 import pytest
 
-from openpgp import (
+from openpgp.armor import BlockType, Dearmor, write as armor_write
+from openpgp.crypto.aead import AeadAlgorithm, ChunkSize
+from openpgp.crypto.ecc_curve import ECCCurve
+from openpgp.crypto.hash import HashAlgorithm
+from openpgp.crypto.sym import SymmetricKeyAlgorithm
+from openpgp.errors import Error
+from openpgp.ser import serialize, write as serialize_write, write_len
+from openpgp.util import (
+    encrypt_session_key_to_recipient,
+    encrypt_session_key_with_password,
+    sign_cleartext_message_many as _openpgp_sign_cleartext_message_many,
+)
+from openpgp.composed import (
     ArmorOptions,
     CleartextSignedMessage,
     DetachedSignature,
@@ -13,25 +26,23 @@ from openpgp import (
     KeyType,
     Message,
     MessageBuilder,
-    PublicKey,
-    SecretKey,
     SecretKeyParamsBuilder,
-    SignatureInfo,
-    StringToKey,
+    SignedPublicKey,
+    SignedSecretKey,
     SubkeyParamsBuilder,
-    encrypt_message_to_recipient_bytes,
-    encrypt_message_to_recipient,
-    encrypt_message_to_recipients_bytes,
-    encrypt_message_to_recipients,
-    encrypt_message_with_password_bytes,
-    encrypt_message_with_password,
-    encrypt_session_key_to_recipient,
-    encrypt_session_key_with_password,
-    inspect_message,
-    sign_cleartext_message,
-    sign_cleartext_message_many,
-    sign_message,
-    sign_message_many,
+)
+from openpgp.packet import Packet, PacketParser, Signature
+from openpgp.types import (
+    CompressionAlgorithm,
+    Duration,
+    Fingerprint,
+    KeyId,
+    KeyVersion,
+    Mpi,
+    PacketLength,
+    StringToKey,
+    Tag,
+    Timestamp,
 )
 
 
@@ -41,7 +52,263 @@ BUNDLED_KEY_FINGERPRINTS = [
     "d1a66e1a23b182c9980f788cfbfcc82a015e7330",
     "cb186c4f0609a697e4d52dfa6c722b0c1f1e27c18a56708f6525ec27bad9acc9",
 ]
-BUNDLED_SIGNATURE_HASH_ALGORITHMS = ["SHA256", "SHA512"]
+BUNDLED_SIGNATURE_HASH_ALGORITHMS = ["sha256", "sha512"]
+
+
+class TestRng:
+    def randbytes(self, n: int) -> bytes:
+        return os.urandom(n)
+
+
+def _message_builder_with_version(
+    data: bytes,
+    file_name: str,
+    version: str,
+    symmetric_algorithm: Any,
+    aead_algorithm: Any,
+) -> MessageBuilder:
+    builder = MessageBuilder.from_bytes(file_name, data)
+    if version == "seipd-v1":
+        return builder.seipd_v1(symmetric_algorithm)
+    if version == "seipd-v2":
+        return builder.seipd_v2(symmetric_algorithm, aead_algorithm)
+    raise ValueError(f"unsupported encryption version: {version}")
+
+
+def _sign_message(
+    data: bytes,
+    signer: Any,
+    password: str | None = None,
+    file_name: str = "",
+    hash_algorithm: Any = "sha256",
+) -> str:
+    return (
+        MessageBuilder.from_bytes(file_name, data)
+        .sign(signer, password, hash_algorithm)
+        .to_armored_string()
+    )
+
+
+def _sign_message_many(
+    data: bytes,
+    signers: list[Any],
+    passwords: list[str | None] | None = None,
+    file_name: str = "",
+    hash_algorithm: Any = "sha256",
+) -> str:
+    passwords = passwords or [None] * len(signers)
+    builder = MessageBuilder.from_bytes(file_name, data)
+    for signer, password in zip(signers, passwords):
+        builder.sign(signer, password, hash_algorithm)
+    return builder.to_armored_string()
+
+
+def _encrypt_message_to_recipient(
+    data: bytes,
+    recipient: Any,
+    file_name: str = "",
+    version: str = "seipd-v2",
+    symmetric_algorithm: Any = "aes256",
+    aead_algorithm: Any = "ocb",
+    compression: Any | None = None,
+    session_key: bytes | None = None,
+    anonymous_recipient: bool = False,
+) -> str:
+    return _encrypt_message_to_recipients(
+        data,
+        [recipient],
+        file_name,
+        version,
+        symmetric_algorithm,
+        aead_algorithm,
+        compression,
+        session_key,
+        anonymous_recipient,
+    )
+
+
+def _encrypt_message_to_recipient_bytes(
+    data: bytes,
+    recipient: Any,
+    file_name: str = "",
+    version: str = "seipd-v2",
+    symmetric_algorithm: Any = "aes256",
+    aead_algorithm: Any = "ocb",
+    compression: Any | None = None,
+    session_key: bytes | None = None,
+    anonymous_recipient: bool = False,
+) -> bytes:
+    return _encrypt_message_to_recipients_bytes(
+        data,
+        [recipient],
+        file_name,
+        version,
+        symmetric_algorithm,
+        aead_algorithm,
+        compression,
+        session_key,
+        anonymous_recipient,
+    )
+
+
+def _encrypt_message_to_recipients(
+    data: bytes,
+    recipients: list[Any],
+    file_name: str = "",
+    version: str = "seipd-v2",
+    symmetric_algorithm: Any = "aes256",
+    aead_algorithm: Any = "ocb",
+    compression: Any | None = None,
+    session_key: bytes | None = None,
+    anonymous_recipient: bool = False,
+) -> str:
+    return _configure_recipient_message_builder(
+        data,
+        recipients,
+        file_name,
+        version,
+        symmetric_algorithm,
+        aead_algorithm,
+        compression,
+        session_key,
+        anonymous_recipient,
+    ).to_armored_string()
+
+
+def _encrypt_message_to_recipients_bytes(
+    data: bytes,
+    recipients: list[Any],
+    file_name: str = "",
+    version: str = "seipd-v2",
+    symmetric_algorithm: Any = "aes256",
+    aead_algorithm: Any = "ocb",
+    compression: Any | None = None,
+    session_key: bytes | None = None,
+    anonymous_recipient: bool = False,
+) -> bytes:
+    return _configure_recipient_message_builder(
+        data,
+        recipients,
+        file_name,
+        version,
+        symmetric_algorithm,
+        aead_algorithm,
+        compression,
+        session_key,
+        anonymous_recipient,
+    ).to_vec()
+
+
+def _configure_recipient_message_builder(
+    data: bytes,
+    recipients: list[Any],
+    file_name: str,
+    version: str,
+    symmetric_algorithm: Any,
+    aead_algorithm: Any,
+    compression: Any | None,
+    session_key: bytes | None,
+    anonymous_recipient: bool,
+) -> MessageBuilder:
+    builder = _message_builder_with_version(
+        data, file_name, version, symmetric_algorithm, aead_algorithm
+    )
+    if compression is not None:
+        builder.compression(compression)
+    if session_key is not None:
+        builder.set_session_key(session_key)
+    for recipient in recipients:
+        if anonymous_recipient:
+            builder.encrypt_to_key_anonymous(recipient)
+        else:
+            builder.encrypt_to_key(recipient)
+    return builder
+
+
+def _encrypt_message_with_password(
+    data: bytes,
+    password: str,
+    file_name: str = "",
+    version: str = "seipd-v2",
+    symmetric_algorithm: Any = "aes256",
+    aead_algorithm: Any = "ocb",
+    compression: Any | None = None,
+    session_key: bytes | None = None,
+) -> str:
+    return _configure_password_message_builder(
+        data,
+        password,
+        file_name,
+        version,
+        symmetric_algorithm,
+        aead_algorithm,
+        compression,
+        session_key,
+    ).to_armored_string()
+
+
+def _encrypt_message_with_password_bytes(
+    data: bytes,
+    password: str,
+    file_name: str = "",
+    version: str = "seipd-v2",
+    symmetric_algorithm: Any = "aes256",
+    aead_algorithm: Any = "ocb",
+    compression: Any | None = None,
+    session_key: bytes | None = None,
+) -> bytes:
+    return _configure_password_message_builder(
+        data,
+        password,
+        file_name,
+        version,
+        symmetric_algorithm,
+        aead_algorithm,
+        compression,
+        session_key,
+    ).to_vec()
+
+
+def _configure_password_message_builder(
+    data: bytes,
+    password: str,
+    file_name: str,
+    version: str,
+    symmetric_algorithm: Any,
+    aead_algorithm: Any,
+    compression: Any | None,
+    session_key: bytes | None,
+) -> MessageBuilder:
+    builder = _message_builder_with_version(
+        data, file_name, version, symmetric_algorithm, aead_algorithm
+    )
+    if compression is not None:
+        builder.compression(compression)
+    if session_key is not None:
+        builder.set_session_key(session_key)
+    return builder.encrypt_with_password(StringToKey.argon2(1, 4, 21), password)
+
+
+def _sign_cleartext_message(
+    text: str,
+    signer: Any,
+    password: str | None = None,
+    hash_algorithm: Any = "sha256",
+) -> str:
+    return CleartextSignedMessage.sign(
+        text, signer, password, hash_algorithm
+    ).to_armored()
+
+
+def _sign_cleartext_message_many(
+    text: str,
+    signers: list[Any],
+    passwords: list[str | None] | None = None,
+    hash_algorithm: Any = "sha256",
+) -> str:
+    return _openpgp_sign_cleartext_message_many(
+        text, signers, passwords, hash_algorithm
+    )
 
 
 def read_fixture_text(name: str) -> str:
@@ -65,18 +332,18 @@ def read_fixture_json(name: str) -> OpenPGPInteropDecryptCase:
     return cast(OpenPGPInteropDecryptCase, json.loads(read_fixture_text(name)))
 
 
-def load_public_key_fixture(name: str) -> PublicKey:
+def load_public_key_fixture(name: str) -> SignedPublicKey:
     data = read_fixture_text(name)
     try:
-        public_key, _ = PublicKey.from_armor(data)
+        public_key, _ = SignedPublicKey.from_armor(data)
     except ValueError:
-        secret_key, _ = SecretKey.from_armor(data)
+        secret_key, _ = SignedSecretKey.from_armor(data)
         return secret_key.to_public_key()
     else:
         return public_key
 
 
-def generate_signing_and_encryption_key(user_id: str) -> SecretKey:
+def generate_signing_and_encryption_key(user_id: str) -> SignedSecretKey:
     return (
         SecretKeyParamsBuilder()
         .version(6)
@@ -100,7 +367,7 @@ def generate_signing_and_encryption_key(user_id: str) -> SecretKey:
     )
 
 
-def generate_subkey_signing_and_encryption_key(user_id: str) -> SecretKey:
+def generate_subkey_signing_and_encryption_key(user_id: str) -> SignedSecretKey:
     return (
         SecretKeyParamsBuilder()
         .version(6)
@@ -131,19 +398,17 @@ def generate_subkey_signing_and_encryption_key(user_id: str) -> SecretKey:
     )
 
 
-def signature_index_for_key_id(infos: list[SignatureInfo], key_id: str) -> int:
+def signature_index_for_key_id(sigs: list[Signature], key_id: str) -> int:
     return next(
-        index for index, info in enumerate(infos) if key_id in info.issuer_key_ids
+        index for index, sig in enumerate(sigs) if key_id in sig.issuer_key_id()
     )
 
 
-def signature_index_for_fingerprint(
-    infos: list[SignatureInfo], fingerprint: str
-) -> int:
+def signature_index_for_fingerprint(sigs: list[Signature], fingerprint: str) -> int:
     return next(
         index
-        for index, info in enumerate(infos)
-        if fingerprint in info.issuer_fingerprints
+        for index, sig in enumerate(sigs)
+        if fingerprint in sig.issuer_fingerprint()
     )
 
 
@@ -177,20 +442,88 @@ k0mXubZvyl4GBg==
 
 
 def test_parse_public_key_from_armor() -> None:
-    key, headers = PublicKey.from_armor(PUBLIC_KEY)
+    key, headers = SignedPublicKey.from_armor(PUBLIC_KEY)
 
     assert headers == {}
     assert key.fingerprint
     assert key.key_id
     assert key.public_subkey_count == 1
     assert key.user_ids == []
-    assert key.revocation_signature_infos() == []
-    assert PublicKey.from_bytes(key.to_bytes()).fingerprint == key.fingerprint
+    assert key.details.revocation_signatures == []
+    assert SignedPublicKey.from_bytes(key.to_bytes()).fingerprint == key.fingerprint
     key.verify_bindings()
 
 
+def test_packet_parser_exposes_native_packet_values() -> None:
+    key, _ = SignedPublicKey.from_armor(read_fixture_text("rsa-rsa-sample-1.asc"))
+    packets = list(PacketParser(key.to_bytes()))
+
+    assert packets
+    assert packets[0].kind == "public-key"
+    assert packets[0].header.tag == 6
+    assert packets[0].to_bytes() == packets[0].value.to_bytes()
+    assert Packet.from_bytes(packets[0].to_bytes()).kind == "public-key"
+
+
+def test_native_armor_and_serialization_round_trip() -> None:
+    key, _ = SignedPublicKey.from_armor(read_fixture_text("rsa-rsa-sample-1.asc"))
+    armored = io.StringIO()
+
+    armor_write(key, BlockType.PublicKey, armored, {"Comment": ["native rPGP"]})
+    dearmor = Dearmor(armored.getvalue())
+
+    assert dearmor.typ == BlockType.PublicKey
+    assert dearmor.headers == {"Comment": ["native rPGP"]}
+    assert dearmor.readall() == key.to_bytes()
+    assert serialize(key) == key.to_bytes()
+    assert write_len(key) == len(key.to_bytes())
+    output = io.BytesIO()
+    serialize_write(key, output)
+    assert output.getvalue() == key.to_bytes()
+
+    assert Error("manual binding error").code == "BINDING"
+
+    with pytest.raises(Error) as error:
+        Dearmor("not ASCII armor")
+    assert error.value.code
+
+
+def test_native_algorithm_bindings_delegate_to_rpgp() -> None:
+    assert HashAlgorithm.Sha256.digest(b"abc").hex() == (
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    )
+    assert HashAlgorithm.Sha256.digest_size() == 32
+    assert SymmetricKeyAlgorithm.AES256.key_size() == 32
+    assert AeadAlgorithm.Ocb.nonce_size() == 15
+    assert ChunkSize().as_byte_size() == 4096
+    assert ECCCurve.P256.hash_algo() == HashAlgorithm.Sha256
+
+    string_to_key = StringToKey.iterated(HashAlgorithm.Sha256, 96, bytes(8))
+    assert string_to_key.hash_algorithm_type == HashAlgorithm.Sha256
+    MessageBuilder.from_bytes("payload", b"data").compression(
+        CompressionAlgorithm.ZLIB
+    ).seipd_v2(SymmetricKeyAlgorithm.AES256, AeadAlgorithm.Ocb)
+    assert KeyType.ecdsa(ECCCurve.P256).can_sign()
+
+
+def test_native_core_value_types_round_trip() -> None:
+    assert Duration.from_secs(9).to_bytes() == b"\x00\x00\x00\x09"
+    assert Timestamp.from_secs(10).to_bytes() == b"\x00\x00\x00\x0a"
+    assert KeyVersion.V6.fingerprint_len() == 32
+    fingerprint = Fingerprint(KeyVersion.V4, bytes(range(20)))
+    assert bytes(fingerprint) == bytes(range(20))
+    assert KeyId.WILDCARD.is_wildcard()
+    assert bytes(KeyId(bytes(range(8)))) == bytes(range(8))
+    mpi = Mpi.from_slice(b"\x00\x01\xff")
+    assert bytes(mpi) == b"\x01\xff"
+    assert Mpi.try_from_reader(mpi.to_bytes()) == mpi
+    assert PacketLength.try_from_reader(b"\x05") == PacketLength.fixed(5)
+    assert Tag.PublicKey.value == 6
+    assert Tag.PublicKey.encode() == 0xC6
+
+
 def test_parse_secret_key_and_convert_to_public() -> None:
-    secret_key, headers = SecretKey.from_armor(SECRET_KEY)
+    secret_key, headers = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
 
     assert headers == {}
@@ -198,14 +531,14 @@ def test_parse_secret_key_and_convert_to_public() -> None:
     assert public_key.public_subkey_count == 1
     assert public_key.fingerprint == secret_key.fingerprint
     assert secret_key.user_ids == public_key.user_ids
-    assert secret_key.revocation_signature_infos() == []
-    assert public_key.revocation_signature_infos() == []
+    assert secret_key.details.revocation_signatures == []
+    assert public_key.details.revocation_signatures == []
     secret_key.verify_bindings()
 
 
 def test_round_trip_public_key_armor() -> None:
-    key, _ = PublicKey.from_armor(PUBLIC_KEY)
-    reparsed, headers = PublicKey.from_armor(key.to_armored())
+    key, _ = SignedPublicKey.from_armor(PUBLIC_KEY)
+    reparsed, headers = SignedPublicKey.from_armor(key.to_armored())
 
     assert headers == {}
     assert reparsed.fingerprint == key.fingerprint
@@ -225,75 +558,75 @@ def test_key_deserializers_support_many_and_file_inputs() -> None:
         MULTI_OBJECT_DESERIALIZATION_FIXTURES / "secret-keys.pgp"
     ).read_bytes()
 
-    public_keys, public_headers = PublicKey.from_armor_many(public_armor)
+    public_keys, public_headers = SignedPublicKey.from_armor_many(public_armor)
     assert public_headers == {}
     assert [key.fingerprint for key in public_keys] == BUNDLED_KEY_FINGERPRINTS
-    assert [key.fingerprint for key in PublicKey.from_bytes_many(public_bytes)] == (
-        BUNDLED_KEY_FINGERPRINTS
-    )
+    assert [
+        key.fingerprint for key in SignedPublicKey.from_bytes_many(public_bytes)
+    ] == (BUNDLED_KEY_FINGERPRINTS)
 
-    secret_keys, secret_headers = SecretKey.from_armor_many(secret_armor)
+    secret_keys, secret_headers = SignedSecretKey.from_armor_many(secret_armor)
     assert secret_headers == {}
     assert [key.fingerprint for key in secret_keys] == BUNDLED_KEY_FINGERPRINTS
-    assert [key.fingerprint for key in SecretKey.from_bytes_many(secret_bytes)] == (
-        BUNDLED_KEY_FINGERPRINTS
-    )
+    assert [
+        key.fingerprint for key in SignedSecretKey.from_bytes_many(secret_bytes)
+    ] == (BUNDLED_KEY_FINGERPRINTS)
 
     assert (
-        PublicKey.from_file(
+        SignedPublicKey.from_file(
             MULTI_OBJECT_DESERIALIZATION_FIXTURES / "public-keys.pgp"
         ).fingerprint
         == BUNDLED_KEY_FINGERPRINTS[0]
     )
     assert (
-        SecretKey.from_file(
+        SignedSecretKey.from_file(
             MULTI_OBJECT_DESERIALIZATION_FIXTURES / "secret-keys.pgp"
         ).fingerprint
         == BUNDLED_KEY_FINGERPRINTS[0]
     )
     assert (
-        PublicKey.from_armor_file(
+        SignedPublicKey.from_armor_file(
             MULTI_OBJECT_DESERIALIZATION_FIXTURES / "public-keys.asc"
         )[0].fingerprint
         == BUNDLED_KEY_FINGERPRINTS[0]
     )
     assert (
-        SecretKey.from_armor_file(
+        SignedSecretKey.from_armor_file(
             MULTI_OBJECT_DESERIALIZATION_FIXTURES / "secret-keys.asc"
         )[0].fingerprint
         == BUNDLED_KEY_FINGERPRINTS[0]
     )
     assert [
         key.fingerprint
-        for key in PublicKey.from_file_many(
+        for key in SignedPublicKey.from_file_many(
             MULTI_OBJECT_DESERIALIZATION_FIXTURES / "public-keys.pgp"
         )
     ] == BUNDLED_KEY_FINGERPRINTS
     assert [
         key.fingerprint
-        for key in SecretKey.from_file_many(
+        for key in SignedSecretKey.from_file_many(
             MULTI_OBJECT_DESERIALIZATION_FIXTURES / "secret-keys.pgp"
         )
     ] == BUNDLED_KEY_FINGERPRINTS
     assert [
         key.fingerprint
-        for key in PublicKey.from_armor_file_many(
+        for key in SignedPublicKey.from_armor_file_many(
             MULTI_OBJECT_DESERIALIZATION_FIXTURES / "public-keys.asc"
         )[0]
     ] == BUNDLED_KEY_FINGERPRINTS
     assert [
         key.fingerprint
-        for key in SecretKey.from_armor_file_many(
+        for key in SignedSecretKey.from_armor_file_many(
             MULTI_OBJECT_DESERIALIZATION_FIXTURES / "secret-keys.asc"
         )[0]
     ] == BUNDLED_KEY_FINGERPRINTS
 
 
 def test_sign_and_verify_message() -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
 
-    armored = sign_message(b"Hello world", secret_key)
+    armored = _sign_message(b"Hello world", secret_key)
     message, headers = Message.from_armor(armored)
 
     assert headers == {}
@@ -302,25 +635,25 @@ def test_sign_and_verify_message() -> None:
     assert message.is_literal is False
     assert message.literal_mode() == "binary"
     assert message.literal_filename() == b""
-    assert message.payload_bytes() == b"Hello world"
-    assert message.payload_text() == "Hello world"
-    assert message.signature_infos()[0].notations == []
-    assert message.signature_infos()[0].revocation_key is None
+    assert message.as_data_vec() == b"Hello world"
+    assert message.as_data_string() == "Hello world"
+    assert message.signatures()[0].notations() == []
+    assert message.signatures()[0].revocation_key() is None
     message.verify(public_key)
 
 
 def test_sign_message_supports_custom_hash_algorithm() -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
 
-    armored = sign_message(b"Hello world", secret_key, hash_algorithm="sha512")
+    armored = _sign_message(b"Hello world", secret_key, hash_algorithm="sha512")
     message, _ = Message.from_armor(armored)
-    info = message.signature_infos()[0]
+    info = message.signatures()[0]
 
-    assert info.signature_type == "binary"
-    assert info.hash_algorithm == "SHA512"
-    assert info.notations == []
-    assert info.revocation_key is None
+    assert info.typ() == "binary"
+    assert info.hash_alg() == "sha512"
+    assert info.notations() == []
+    assert info.revocation_key() is None
     message.verify(public_key)
 
 
@@ -331,63 +664,65 @@ def test_sign_message_accepts_secret_subkey() -> None:
     public_key = secret_key.to_public_key()
     signing_subkey = secret_key.secret_subkeys[0]
 
-    armored = sign_message(b"Hello from a subkey", signing_subkey)
+    armored = _sign_message(b"Hello from a subkey", signing_subkey)
     message, _ = Message.from_armor(armored)
-    info = message.signature_infos()[0]
+    info = message.signatures()[0]
 
-    assert info.issuer_fingerprints == [signing_subkey.fingerprint]
+    assert info.issuer_fingerprint() == [signing_subkey.key.fingerprint]
     message.verify(public_key)
 
 
 def test_sign_message_many_supports_multiple_signers() -> None:
-    first_secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    first_secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     second_secret_key = generate_signing_and_encryption_key(
         "Second <second@example.com>"
     )
     first_public_key = first_secret_key.to_public_key()
     second_public_key = second_secret_key.to_public_key()
 
-    armored = sign_message_many(
+    armored = _sign_message_many(
         b"multi-signed payload",
         [first_secret_key, second_secret_key],
         hash_algorithm="sha384",
     )
     message, _ = Message.from_armor(armored)
-    infos = message.signature_infos()
+    sigs = message.signatures()
 
     assert message.signature_count() == 2
-    assert len(infos) == 2
-    assert {info.signature_type for info in infos} == {"binary"}
-    assert {info.hash_algorithm for info in infos} == {"SHA384"}
+    assert len(sigs) == 2
+    assert {sig.typ() for sig in sigs} == {"binary"}
+    assert {sig.hash_alg() for sig in sigs} == {"sha384"}
 
-    first_index = signature_index_for_fingerprint(infos, first_public_key.fingerprint)
-    second_index = signature_index_for_fingerprint(infos, second_public_key.fingerprint)
+    first_index = signature_index_for_fingerprint(sigs, first_public_key.fingerprint)
+    second_index = signature_index_for_fingerprint(sigs, second_public_key.fingerprint)
 
     assert message.verify_signature(
         first_public_key, first_index
-    ).issuer_fingerprints == [first_public_key.fingerprint]
+    ).issuer_fingerprint() == [first_public_key.fingerprint]
     assert message.verify_signature(
         second_public_key, second_index
-    ).issuer_fingerprints == [second_public_key.fingerprint]
+    ).issuer_fingerprint() == [second_public_key.fingerprint]
 
 
 def test_sign_and_verify_detached_signature() -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
     payload = b"detached payload"
 
-    signature = DetachedSignature.sign_binary(payload, secret_key)
-    info = signature.signature_info()
+    signature = DetachedSignature.sign_binary_data(
+        TestRng(), secret_key, None, "sha256", payload
+    )
+    info = signature.signature
 
-    assert info.signature_type == "binary"
-    assert info.hash_algorithm == "SHA256"
-    assert info.is_one_pass is False
-    assert info.notations == []
-    assert info.revocation_key is None
+    assert info.typ() == "binary"
+    assert info.hash_alg() == "sha256"
+    assert info.notations() == []
+    assert info.revocation_key() is None
+    info.verify(public_key.primary_key, payload)
     signature.verify(public_key, payload)
     assert (
-        signature.verify_signature(public_key, payload).signed_hash_value
-        == info.signed_hash_value
+        signature.verify_signature(public_key, payload).signed_hash_value()
+        == info.signed_hash_value()
     )
 
     reparsed = DetachedSignature.from_bytes(signature.to_bytes())
@@ -395,6 +730,20 @@ def test_sign_and_verify_detached_signature() -> None:
 
     armored_signature, headers = DetachedSignature.from_armor(signature.to_armored())
     assert headers == {}
+
+
+def test_signature_verifies_embedded_primary_key_binding() -> None:
+    secret_key = generate_subkey_signing_and_encryption_key(
+        "Embedded Binding <binding@example.com>"
+    )
+    public_key = secret_key.to_public_key()
+    signed_subkey = public_key.public_subkeys[0]
+    binding = signed_subkey.signatures[0]
+    embedded = binding.embedded_signature()
+
+    assert embedded is not None
+    assert embedded.typ() == "primary-key-binding"
+    embedded.verify_primary_key_binding(signed_subkey.key, public_key.primary_key)
 
 
 def test_detached_signature_sign_binary_accepts_secret_subkey() -> None:
@@ -405,11 +754,11 @@ def test_detached_signature_sign_binary_accepts_secret_subkey() -> None:
     signing_subkey = secret_key.secret_subkeys[0]
     payload = b"detached subkey payload"
 
-    signature = DetachedSignature.sign_binary(payload, signing_subkey)
+    signature = DetachedSignature.sign_binary_data(
+        TestRng(), signing_subkey, None, "sha256", payload
+    )
 
-    assert signature.signature_info().issuer_fingerprints == [
-        signing_subkey.fingerprint
-    ]
+    assert signature.signature.issuer_fingerprint() == [signing_subkey.key.fingerprint]
     signature.verify(public_key, payload)
     armored_signature, headers = DetachedSignature.from_armor(signature.to_armored())
     assert headers == {}
@@ -418,7 +767,7 @@ def test_detached_signature_sign_binary_accepts_secret_subkey() -> None:
 
 def test_detached_signature_deserializers_support_many_and_file_inputs() -> None:
     payload = (MULTI_OBJECT_DESERIALIZATION_FIXTURES / "payload.bin").read_bytes()
-    public_keys = PublicKey.from_bytes_many(
+    public_keys = SignedPublicKey.from_bytes_many(
         (MULTI_OBJECT_DESERIALIZATION_FIXTURES / "public-keys.pgp").read_bytes()
     )
     assert [key.fingerprint for key in public_keys] == BUNDLED_KEY_FINGERPRINTS
@@ -427,40 +776,35 @@ def test_detached_signature_deserializers_support_many_and_file_inputs() -> None
         (MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.asc").read_text()
     )
     assert headers == {}
+    assert [signature.signature.hash_alg() for signature in armored_signatures] == (
+        BUNDLED_SIGNATURE_HASH_ALGORITHMS
+    )
     assert [
-        signature.signature_info().hash_algorithm for signature in armored_signatures
-    ] == BUNDLED_SIGNATURE_HASH_ALGORITHMS
-    assert [
-        signature.signature_info().issuer_fingerprints[0]
-        for signature in armored_signatures
-    ] == BUNDLED_KEY_FINGERPRINTS
+        signature.signature.issuer_fingerprint()[0] for signature in armored_signatures
+    ] == (BUNDLED_KEY_FINGERPRINTS)
     for signature, public_key in zip(armored_signatures, public_keys):
         signature.verify(public_key, payload)
 
     binary_signatures = DetachedSignature.from_bytes_many(
         (MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.pgp").read_bytes()
     )
-    assert [
-        signature.signature_info().hash_algorithm for signature in binary_signatures
-    ] == BUNDLED_SIGNATURE_HASH_ALGORITHMS
+    assert [signature.signature.hash_alg() for signature in binary_signatures] == (
+        BUNDLED_SIGNATURE_HASH_ALGORITHMS
+    )
     for signature, public_key in zip(binary_signatures, public_keys):
         signature.verify(public_key, payload)
 
     assert (
         DetachedSignature.from_file(
             MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.pgp"
-        )
-        .signature_info()
-        .hash_algorithm
-        == "SHA256"
+        ).signature.hash_alg()
+        == "sha256"
     )
     assert (
         DetachedSignature.from_armor_file(
             MULTI_OBJECT_DESERIALIZATION_FIXTURES / "detached-signatures.asc"
-        )[0]
-        .signature_info()
-        .hash_algorithm
-        == "SHA256"
+        )[0].signature.hash_alg()
+        == "sha256"
     )
 
     for signature, public_key in zip(
@@ -482,31 +826,31 @@ def test_detached_signature_deserializers_support_many_and_file_inputs() -> None
 def test_detached_signature_supports_custom_hash_algorithm_for_binary_signatures() -> (
     None
 ):
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
 
-    signature = DetachedSignature.sign_binary(
-        b"detached payload",
-        secret_key,
-        hash_algorithm="sha512",
+    signature = DetachedSignature.sign_binary_data(
+        TestRng(), secret_key, None, "sha512", b"detached payload"
     )
 
-    assert signature.signature_info().hash_algorithm == "SHA512"
+    assert signature.signature.hash_alg() == "sha512"
     signature.verify(public_key, b"detached payload")
 
 
 def test_detached_text_signature_uses_text_verification_helpers() -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
     text = "hello\nworld\n"
 
-    signature = DetachedSignature.sign_text(text, secret_key, hash_algorithm="sha384")
-    info = signature.signature_info()
+    signature = DetachedSignature.sign_text_data(
+        TestRng(), secret_key, None, "sha384", text.encode()
+    )
+    info = signature.signature
 
-    assert info.signature_type == "text"
-    assert info.hash_algorithm == "SHA384"
+    assert info.typ() == "text"
+    assert info.hash_alg() == "sha384"
     signature.verify_text(public_key, "hello\r\nworld\r\n")
-    assert signature.verify_text_signature(public_key, text).signature_type == "text"
+    assert signature.verify_text_signature(public_key, text).typ() == "text"
 
 
 def test_detached_signature_verifies_when_made_by_signing_subkey() -> None:
@@ -519,17 +863,19 @@ def test_detached_signature_verifies_when_made_by_signing_subkey() -> None:
     signature.verify(public_key, payload)
     info = signature.verify_signature(public_key, payload)
 
-    assert info.signature_type == "binary"
-    assert info.issuer_fingerprints
-    assert public_key.fingerprint not in info.issuer_fingerprints
+    assert info.typ() == "binary"
+    assert info.issuer_fingerprint()
+    assert public_key.fingerprint not in info.issuer_fingerprint()
 
 
 def test_detached_signature_verifies_streamed_file(tmp_path: Path) -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
     payload = b"streamed payload" * 4096
 
-    signature = DetachedSignature.sign_binary(payload, secret_key)
+    signature = DetachedSignature.sign_binary_data(
+        TestRng(), secret_key, None, "sha256", payload
+    )
     artifact = tmp_path / "artifact.bin"
     artifact.write_bytes(payload)
 
@@ -537,8 +883,8 @@ def test_detached_signature_verifies_streamed_file(tmp_path: Path) -> None:
     signature.verify_file(public_key, str(artifact))
     info = signature.verify_file_signature(public_key, artifact)
 
-    assert info.signature_type == "binary"
-    assert info.hash_algorithm == "SHA256"
+    assert info.typ() == "binary"
+    assert info.hash_alg() == "sha256"
 
 
 def test_detached_signature_verify_file_works_with_signing_subkey() -> None:
@@ -566,9 +912,11 @@ def test_detached_signature_verify_file_fails_against_wrong_key() -> None:
 
 
 def test_detached_signature_verify_file_raises_for_missing_path(tmp_path: Path) -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
-    signature = DetachedSignature.sign_binary(b"x", secret_key)
+    signature = DetachedSignature.sign_binary_data(
+        TestRng(), secret_key, None, "sha256", b"x"
+    )
 
     with pytest.raises(ValueError, match="No such file"):
         signature.verify_file(public_key, tmp_path / "does-not-exist.bin")
@@ -589,7 +937,7 @@ def test_detached_signature_fails_against_unrelated_certificate() -> None:
 
 
 def test_encrypt_and_decrypt_message_with_password_seipdv1() -> None:
-    armored = encrypt_message_with_password(
+    armored = _encrypt_message_with_password(
         b"secret payload",
         "hunter2",
         file_name="note.txt",
@@ -598,10 +946,9 @@ def test_encrypt_and_decrypt_message_with_password_seipdv1() -> None:
     message, headers = Message.from_armor(armored)
 
     assert headers == {}
-    assert inspect_message(armored).kind == "encrypted"
     assert message.kind == "encrypted"
     with pytest.raises(ValueError, match="message must be decrypted"):
-        message.payload_text()
+        message.as_data_string()
 
     decrypted = message.decrypt_with_password("hunter2")
 
@@ -610,12 +957,12 @@ def test_encrypt_and_decrypt_message_with_password_seipdv1() -> None:
     assert decrypted.signature_count() == 0
     assert decrypted.one_pass_signature_count() == 0
     assert decrypted.regular_signature_count() == 0
-    assert decrypted.signature_infos() == []
-    assert decrypted.payload_text() == "secret payload"
+    assert decrypted.signatures() == []
+    assert decrypted.as_data_string() == "secret payload"
 
 
 def test_encrypt_and_decrypt_message_with_password_seipdv2_and_compression() -> None:
-    armored = encrypt_message_with_password(
+    armored = _encrypt_message_with_password(
         b"compressed payload",
         "opensesame",
         version="seipd-v2",
@@ -627,26 +974,26 @@ def test_encrypt_and_decrypt_message_with_password_seipdv2_and_compression() -> 
     assert decrypted.kind == "compressed"
     assert decrypted.is_compressed is True
     assert decrypted.literal_mode() == "binary"
-    assert decrypted.payload_text() == "compressed payload"
+    assert decrypted.as_data_string() == "compressed payload"
 
 
 def test_encrypt_and_decrypt_message_to_recipient() -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
 
-    armored = encrypt_message_to_recipient(
+    armored = _encrypt_message_to_recipient(
         b"recipient payload",
         public_key,
         file_name="message.bin",
     )
     message, headers = Message.from_armor(armored)
-    decrypted = message.decrypt(secret_key)
+    decrypted = message.decrypt(None, secret_key)
 
     assert headers == {}
     assert message.kind == "encrypted"
     assert decrypted.literal_filename() == b""
-    assert decrypted.signature_infos() == []
-    assert decrypted.payload_bytes() == b"recipient payload"
+    assert decrypted.signatures() == []
+    assert decrypted.as_data_vec() == b"recipient payload"
 
     with pytest.raises(ValueError, match="message was not signed"):
         decrypted.verify(public_key)
@@ -659,7 +1006,7 @@ def test_encrypt_message_to_recipient_accepts_public_subkey() -> None:
     public_key = secret_key.to_public_key()
     encryption_subkey = public_key.public_subkeys[1]
 
-    message_bytes = encrypt_message_to_recipient_bytes(
+    message_bytes = _encrypt_message_to_recipient_bytes(
         b"recipient subkey payload",
         encryption_subkey,
     )
@@ -667,23 +1014,25 @@ def test_encrypt_message_to_recipient_accepts_public_subkey() -> None:
 
     assert (
         message.public_key_encrypted_session_key_packets()[0].recipient_fingerprint
-        == encryption_subkey.fingerprint
+        == encryption_subkey.key.fingerprint
     )
-    assert message.decrypt(secret_key).payload_bytes() == b"recipient subkey payload"
+    assert (
+        message.decrypt(None, secret_key).as_data_vec() == b"recipient subkey payload"
+    )
 
 
 def test_message_binary_round_trip_and_packet_access_for_recipient_message() -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
 
-    armored = encrypt_message_to_recipient(
+    armored = _encrypt_message_to_recipient(
         b"packet payload", public_key, file_name="packet.bin"
     )
     message, headers = Message.from_armor(armored)
     reparsed = Message.from_bytes(message.to_bytes())
 
     assert headers == {}
-    assert reparsed.decrypt(secret_key).payload_bytes() == b"packet payload"
+    assert reparsed.decrypt(None, secret_key).as_data_vec() == b"packet payload"
 
     pkesks = message.public_key_encrypted_session_key_packets()
     skesks = message.symmetric_key_encrypted_session_key_packets()
@@ -695,7 +1044,7 @@ def test_message_binary_round_trip_and_packet_access_for_recipient_message() -> 
     assert pkesks[0].public_key_algorithm is not None
     assert pkesks[0].recipient_key_id is None
     assert (
-        pkesks[0].recipient_fingerprint == public_key.subkey_bindings()[0].fingerprint
+        pkesks[0].recipient_fingerprint == public_key.public_subkeys[0].key.fingerprint
     )
     assert pkesks[0].recipient_is_anonymous is False
     assert pkesks[0].values_bytes() is not None
@@ -714,7 +1063,7 @@ def test_message_binary_round_trip_and_packet_access_for_recipient_message() -> 
 
 
 def test_password_message_binary_output_and_skesk_packet_access() -> None:
-    message_bytes = encrypt_message_with_password_bytes(
+    message_bytes = _encrypt_message_with_password_bytes(
         b"password packet payload",
         "hunter2",
         version="seipd-v2",
@@ -740,17 +1089,17 @@ def test_password_message_binary_output_and_skesk_packet_access() -> None:
     assert encrypted_data.symmetric_algorithm == "aes128"
     assert encrypted_data.aead_algorithm == "ocb"
     assert (
-        message.decrypt_with_password("hunter2").payload_bytes()
+        message.decrypt_with_password("hunter2").as_data_vec()
         == b"password packet payload"
     )
 
 
 def test_encrypt_to_recipient_with_custom_session_key_and_export_raw_pkesk() -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
     session_key = bytes(range(16))
 
-    message_bytes = encrypt_message_to_recipient_bytes(
+    message_bytes = _encrypt_message_to_recipient_bytes(
         b"custom session key payload",
         public_key,
         version="seipd-v2",
@@ -765,12 +1114,14 @@ def test_encrypt_to_recipient_with_custom_session_key_and_export_raw_pkesk() -> 
         symmetric_algorithm="aes128",
     )
 
-    assert message.decrypt_with_session_key(session_key).payload_bytes() == (
+    assert message.decrypt_with_session_key(session_key).as_data_vec() == (
         b"custom session key payload"
     )
-    assert message.decrypt(secret_key).payload_bytes() == b"custom session key payload"
+    assert (
+        message.decrypt(None, secret_key).as_data_vec() == b"custom session key payload"
+    )
     assert packet.version == 6
-    assert packet.recipient_fingerprint == public_key.subkey_bindings()[0].fingerprint
+    assert packet.recipient_fingerprint == public_key.public_subkeys[0].key.fingerprint
     assert packet.recipient_key_id is None
     assert packet.recipient_is_anonymous is False
     assert packet.public_key_algorithm is not None
@@ -787,7 +1138,7 @@ def test_message_builder_compression_round_trip() -> None:
     message = Message.from_bytes(message_bytes)
 
     assert message.kind == "compressed"
-    assert message.payload_text() == "hello builder"
+    assert message.as_data_string() == "hello builder"
 
 
 def test_message_builder_password_encryption_round_trip() -> None:
@@ -801,7 +1152,7 @@ def test_message_builder_password_encryption_round_trip() -> None:
 
     assert headers == {}
     assert message.kind == "encrypted"
-    assert message.decrypt_with_password("password").payload_text() == "Hello, world!"
+    assert message.decrypt_with_password("password").as_data_string() == "Hello, world!"
 
 
 def test_message_builder_rejects_invalid_session_key_length() -> None:
@@ -824,11 +1175,11 @@ def test_message_builder_armor_options_control_headers_and_checksum() -> None:
 
     assert headers == {"Comment": ["builder test"]}
     assert "\n=" not in armored
-    assert message.decrypt_with_password("hunter2").payload_text() == "hello"
+    assert message.decrypt_with_password("hunter2").as_data_string() == "hello"
 
 
 def test_message_builder_from_reader_data_mode_and_text_signature() -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
 
     message_bytes = (
@@ -839,11 +1190,11 @@ def test_message_builder_from_reader_data_mode_and_text_signature() -> None:
         .to_vec()
     )
     message = Message.from_bytes(message_bytes)
-    info = message.signature_infos()[0]
+    info = message.signatures()[0]
 
     assert message.literal_mode() == "utf8"
-    assert message.payload_text() == "hello\r\nworld\r\n"
-    assert info.signature_type == "text"
+    assert message.as_data_string() == "hello\r\nworld\r\n"
+    assert info.typ() == "text"
     message.verify(public_key)
 
 
@@ -865,7 +1216,7 @@ def test_message_builder_writer_and_file_outputs(tmp_path: Path) -> None:
         binary_writer
     )
     binary_message = Message.from_bytes(binary_writer.getvalue())
-    assert binary_message.payload_text() == "writer payload"
+    assert binary_message.as_data_string() == "writer payload"
 
     text_writer = io.StringIO()
     MessageBuilder.from_bytes(
@@ -873,11 +1224,13 @@ def test_message_builder_writer_and_file_outputs(tmp_path: Path) -> None:
     ).to_armored_writer(text_writer)
     armored_message, headers = Message.from_armor(text_writer.getvalue())
     assert headers == {}
-    assert armored_message.payload_text() == "armored writer payload"
+    assert armored_message.as_data_string() == "armored writer payload"
 
     binary_path = tmp_path / "nested" / "message.pgp"
     MessageBuilder.from_bytes("payload.txt", b"file payload").to_file(binary_path)
-    assert Message.from_bytes(binary_path.read_bytes()).payload_text() == "file payload"
+    assert (
+        Message.from_bytes(binary_path.read_bytes()).as_data_string() == "file payload"
+    )
 
     armored_path = tmp_path / "nested" / "message.asc"
     MessageBuilder.from_bytes("payload.txt", b"armored file payload").to_armored_file(
@@ -886,7 +1239,7 @@ def test_message_builder_writer_and_file_outputs(tmp_path: Path) -> None:
     )
     file_message, file_headers = Message.from_armor(armored_path.read_text())
     assert file_headers == {"Comment": ["file output"]}
-    assert file_message.payload_text() == "armored file payload"
+    assert file_message.as_data_string() == "armored file payload"
 
 
 def test_message_builder_can_sign_and_encrypt_to_subkeys() -> None:
@@ -905,18 +1258,18 @@ def test_message_builder_can_sign_and_encrypt_to_subkeys() -> None:
         .to_armored_string()
     )
     message, _ = Message.from_armor(armored)
-    decrypted = message.decrypt(secret_key)
+    decrypted = message.decrypt(None, secret_key)
 
-    assert decrypted.payload_bytes() == b"subkey builder payload"
-    assert decrypted.signature_infos()[0].issuer_fingerprints == [
-        signing_subkey.fingerprint
+    assert decrypted.as_data_vec() == b"subkey builder payload"
+    assert decrypted.signatures()[0].issuer_fingerprint() == [
+        signing_subkey.key.fingerprint
     ]
     decrypted.verify(public_key)
 
 
 def test_password_encryption_with_custom_session_key_and_raw_skesk() -> None:
     session_key = bytes(range(16))
-    message_bytes = encrypt_message_with_password_bytes(
+    message_bytes = _encrypt_message_with_password_bytes(
         b"custom password session key payload",
         "opensesame",
         version="seipd-v1",
@@ -937,10 +1290,10 @@ def test_password_encryption_with_custom_session_key_and_raw_skesk() -> None:
     assert (
         message.decrypt_with_session_key(
             session_key, symmetric_algorithm="aes128"
-        ).payload_text()
+        ).as_data_string()
         == "custom password session key payload"
     )
-    assert message.decrypt_with_password("opensesame").payload_text() == (
+    assert message.decrypt_with_password("opensesame").as_data_string() == (
         "custom password session key payload"
     )
     assert packet.version == 4
@@ -965,10 +1318,10 @@ def test_decrypted_signed_openpgp_interop_message_supports_signature_verificatio
 ) -> None:
     """Adapt upstream decrypt+verify coverage from rpgp/tests/message_test.rs."""
     case = read_fixture_json(f"openpgp-interop/{case_name}.json")
-    secret_key, _ = SecretKey.from_armor(
+    secret_key, _ = SignedSecretKey.from_armor(
         read_fixture_text(f"openpgp-interop/{case['decryptKey']}")
     )
-    public_key, _ = PublicKey.from_armor(
+    public_key, _ = SignedPublicKey.from_armor(
         read_fixture_text(f"openpgp-interop/{case['verifyKey']}")
     )
     message, _ = Message.from_armor(
@@ -979,41 +1332,41 @@ def test_decrypted_signed_openpgp_interop_message_supports_signature_verificatio
     secret_key.verify_bindings()
     public_key.verify_bindings()
 
-    decrypted = message.decrypt(secret_key, case["passphrase"])
+    decrypted = message.decrypt(case["passphrase"], secret_key)
 
     assert decrypted.kind == "compressed"
     assert decrypted.is_compressed is True
     assert decrypted.is_signed is False
     assert decrypted.is_literal is False
-    assert decrypted.payload_text() == case["textcontent"]
+    assert decrypted.as_data_string() == case["textcontent"]
     assert decrypted.literal_filename() == case["filename"].encode()
     assert decrypted.signature_count() == 1
     assert decrypted.one_pass_signature_count() == 1
     assert decrypted.regular_signature_count() == 0
 
-    infos = decrypted.signature_infos()
+    sigs = decrypted.signatures()
 
-    assert len(infos) == 1
-    assert infos[0].signature_type == "binary"
-    assert infos[0].hash_algorithm is not None
-    assert infos[0].is_one_pass is True
+    assert len(sigs) == 1
+    assert sigs[0].typ() == "binary"
+    assert sigs[0].hash_alg() is not None
 
     verified = decrypted.verify_signature(public_key)
 
-    assert verified.signature_type == infos[0].signature_type
-    assert verified.hash_algorithm == infos[0].hash_algorithm
-    assert verified.signed_hash_value == infos[0].signed_hash_value
-    assert verified.is_one_pass is True
+    assert verified.typ() == sigs[0].typ()
+    assert verified.hash_alg() == sigs[0].hash_alg()
+    assert verified.signed_hash_value() == sigs[0].signed_hash_value()
 
     decrypted.verify(public_key)
 
 
 def test_cleartext_sign_and_verify_round_trip() -> None:
-    secret_key, _ = SecretKey.from_armor(read_fixture_text("cleartext-key-01.asc"))
+    secret_key, _ = SignedSecretKey.from_armor(
+        read_fixture_text("cleartext-key-01.asc")
+    )
     public_key = secret_key.to_public_key()
     text = "hello\n-world-what-\nis up\n"
 
-    armored = sign_cleartext_message(text, secret_key)
+    armored = _sign_cleartext_message(text, secret_key)
     message, headers = CleartextSignedMessage.from_armor(armored)
 
     assert headers == {}
@@ -1031,33 +1384,37 @@ def test_cleartext_sign_and_verify_round_trip() -> None:
 
 
 def test_sign_cleartext_message_supports_custom_hash_algorithm() -> None:
-    secret_key, _ = SecretKey.from_armor(read_fixture_text("cleartext-key-01.asc"))
+    secret_key, _ = SignedSecretKey.from_armor(
+        read_fixture_text("cleartext-key-01.asc")
+    )
     public_key = secret_key.to_public_key()
 
-    armored = sign_cleartext_message("hello\n", secret_key, hash_algorithm="sha512")
+    armored = _sign_cleartext_message("hello\n", secret_key, hash_algorithm="sha512")
     message, _ = CleartextSignedMessage.from_armor(armored)
 
-    assert message.signature_infos()[0].hash_algorithm == "SHA512"
+    assert message.signatures()[0].hash_alg() == "sha512"
     message.verify(public_key)
 
 
 def test_cleartext_signed_message_classmethod_supports_custom_hash_algorithm() -> None:
-    secret_key, _ = SecretKey.from_armor(read_fixture_text("cleartext-key-01.asc"))
+    secret_key, _ = SignedSecretKey.from_armor(
+        read_fixture_text("cleartext-key-01.asc")
+    )
     public_key = secret_key.to_public_key()
 
     message = CleartextSignedMessage.sign(
         "hello\n", secret_key, hash_algorithm="sha512"
     )
-    info = message.signature_infos()[0]
+    info = message.signatures()[0]
 
-    assert info.signature_type == "text"
-    assert info.hash_algorithm == "SHA512"
+    assert info.typ() == "text"
+    assert info.hash_alg() == "sha512"
     reparsed, _ = CleartextSignedMessage.from_armor(message.to_armored())
     reparsed.verify(public_key)
 
 
 def test_sign_cleartext_message_many_supports_multiple_signers() -> None:
-    first_secret_key, _ = SecretKey.from_armor(
+    first_secret_key, _ = SignedSecretKey.from_armor(
         read_fixture_text("cleartext-key-01.asc")
     )
     second_secret_key = generate_signing_and_encryption_key(
@@ -1066,31 +1423,31 @@ def test_sign_cleartext_message_many_supports_multiple_signers() -> None:
     first_public_key = first_secret_key.to_public_key()
     second_public_key = second_secret_key.to_public_key()
 
-    armored = sign_cleartext_message_many(
+    armored = _sign_cleartext_message_many(
         "multi\ncleartext\npayload\n",
         [first_secret_key, second_secret_key],
         hash_algorithm="sha384",
     )
     message, _ = CleartextSignedMessage.from_armor(armored)
-    infos = message.signature_infos()
+    sigs = message.signatures()
 
     assert message.signature_count() == 2
-    assert {info.signature_type for info in infos} == {"text"}
-    assert {info.hash_algorithm for info in infos} == {"SHA384"}
+    assert {sig.typ() for sig in sigs} == {"text"}
+    assert {sig.hash_alg() for sig in sigs} == {"sha384"}
 
-    first_index = signature_index_for_fingerprint(infos, first_public_key.fingerprint)
-    second_index = signature_index_for_fingerprint(infos, second_public_key.fingerprint)
+    first_index = signature_index_for_fingerprint(sigs, first_public_key.fingerprint)
+    second_index = signature_index_for_fingerprint(sigs, second_public_key.fingerprint)
 
     assert message.verify_signature(
         first_public_key, first_index
-    ).issuer_fingerprints == [first_public_key.fingerprint]
+    ).issuer_fingerprint() == [first_public_key.fingerprint]
     assert message.verify_signature(
         second_public_key, second_index
-    ).issuer_fingerprints == [second_public_key.fingerprint]
+    ).issuer_fingerprint() == [second_public_key.fingerprint]
 
 
 def test_encrypt_session_key_to_recipient_supports_anonymous_recipient() -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
 
     packet = encrypt_session_key_to_recipient(
@@ -1108,10 +1465,10 @@ def test_encrypt_session_key_to_recipient_supports_anonymous_recipient() -> None
 
 
 def test_encrypt_message_to_recipient_supports_anonymous_recipient() -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
 
-    armored = encrypt_message_to_recipient(
+    armored = _encrypt_message_to_recipient(
         b"anonymous payload",
         public_key,
         anonymous_recipient=True,
@@ -1122,15 +1479,15 @@ def test_encrypt_message_to_recipient_supports_anonymous_recipient() -> None:
     assert pkesk.recipient_is_anonymous is True
     assert pkesk.recipient_fingerprint is None
     assert pkesk.recipient_key_id is None
-    assert message.decrypt(secret_key).payload_bytes() == b"anonymous payload"
+    assert message.decrypt(None, secret_key).as_data_vec() == b"anonymous payload"
 
 
 def test_encrypt_message_to_recipient_bytes_supports_anonymous_recipient() -> None:
-    secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     public_key = secret_key.to_public_key()
 
     message = Message.from_bytes(
-        encrypt_message_to_recipient_bytes(
+        _encrypt_message_to_recipient_bytes(
             b"anonymous payload",
             public_key,
             anonymous_recipient=True,
@@ -1141,30 +1498,30 @@ def test_encrypt_message_to_recipient_bytes_supports_anonymous_recipient() -> No
     assert pkesk.recipient_is_anonymous is True
     assert pkesk.recipient_fingerprint is None
     assert pkesk.recipient_key_id is None
-    assert message.decrypt(secret_key).payload_bytes() == b"anonymous payload"
+    assert message.decrypt(None, secret_key).as_data_vec() == b"anonymous payload"
 
 
 def test_encrypt_message_to_recipients_encrypts_for_multiple_recipients() -> None:
-    first_secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    first_secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     second_secret_key = generate_signing_and_encryption_key(
         "Second <second@example.com>"
     )
     first_public_key = first_secret_key.to_public_key()
     second_public_key = second_secret_key.to_public_key()
 
-    armored = encrypt_message_to_recipients(
+    armored = _encrypt_message_to_recipients(
         b"shared payload",
         [first_public_key, second_public_key],
     )
     message, _ = Message.from_armor(armored)
 
     assert len(message.public_key_encrypted_session_key_packets()) == 2
-    assert message.decrypt(first_secret_key).payload_bytes() == b"shared payload"
-    assert message.decrypt(second_secret_key).payload_bytes() == b"shared payload"
+    assert message.decrypt(None, first_secret_key).as_data_vec() == b"shared payload"
+    assert message.decrypt(None, second_secret_key).as_data_vec() == b"shared payload"
 
 
 def test_encrypt_message_to_recipients_bytes_supports_anonymous_recipients() -> None:
-    first_secret_key, _ = SecretKey.from_armor(SECRET_KEY)
+    first_secret_key, _ = SignedSecretKey.from_armor(SECRET_KEY)
     second_secret_key = generate_signing_and_encryption_key(
         "Second <second@example.com>"
     )
@@ -1172,7 +1529,7 @@ def test_encrypt_message_to_recipients_bytes_supports_anonymous_recipients() -> 
     second_public_key = second_secret_key.to_public_key()
 
     message = Message.from_bytes(
-        encrypt_message_to_recipients_bytes(
+        _encrypt_message_to_recipients_bytes(
             b"anonymous shared payload",
             [first_public_key, second_public_key],
             anonymous_recipient=True,
@@ -1185,10 +1542,11 @@ def test_encrypt_message_to_recipients_bytes_supports_anonymous_recipients() -> 
     assert all(packet.recipient_fingerprint is None for packet in pkesks)
     assert all(packet.recipient_key_id is None for packet in pkesks)
     assert (
-        message.decrypt(first_secret_key).payload_bytes() == b"anonymous shared payload"
+        message.decrypt(None, first_secret_key).as_data_vec()
+        == b"anonymous shared payload"
     )
     assert (
-        message.decrypt(second_secret_key).payload_bytes()
+        message.decrypt(None, second_secret_key).as_data_vec()
         == b"anonymous shared payload"
     )
 
@@ -1204,24 +1562,23 @@ def test_signed_message_signature_infos_and_indexed_verification() -> None:
     assert message.one_pass_signature_count() == 2
     assert message.regular_signature_count() == 0
 
-    infos = message.signature_infos()
+    sigs = message.signatures()
 
-    assert len(infos) == 2
-    assert {info.signature_type for info in infos} == {"binary"}
-    assert {info.hash_algorithm for info in infos} == {"SHA256"}
-    assert {info.signer_user_id for info in infos} == {
+    assert len(sigs) == 2
+    assert {sig.typ() for sig in sigs} == {"binary"}
+    assert {sig.hash_alg() for sig in sigs} == {"sha256"}
+    assert {sig.signers_userid() for sig in sigs} == {
         "patrice.lumumba@example.net",
         "steve.biko@example.net",
     }
-    assert all(info.is_one_pass for info in infos)
 
-    rsa_index = signature_index_for_key_id(infos, rsa_public_key.key_id)
-    ed_index = signature_index_for_key_id(infos, ed_public_key.key_id)
+    rsa_index = signature_index_for_key_id(sigs, rsa_public_key.key_id)
+    ed_index = signature_index_for_key_id(sigs, ed_public_key.key_id)
 
-    assert message.verify_signature(rsa_public_key, rsa_index).issuer_key_ids == [
+    assert message.verify_signature(rsa_public_key, rsa_index).issuer_key_id() == [
         rsa_public_key.key_id
     ]
-    assert message.verify_signature(ed_public_key, ed_index).issuer_key_ids == [
+    assert message.verify_signature(ed_public_key, ed_index).issuer_key_id() == [
         ed_public_key.key_id
     ]
     message.verify(rsa_public_key, index=rsa_index)
@@ -1238,33 +1595,32 @@ def test_cleartext_multi_signature_infos_and_indexed_verification() -> None:
     assert headers == {"Version": ["GnuPG v2"]}
     assert message.signature_count() == 2
 
-    infos = message.signature_infos()
+    sigs = message.signatures()
 
-    assert len(infos) == 2
-    assert {info.signature_type for info in infos} == {"text"}
-    assert {info.hash_algorithm for info in infos} == {"SHA256"}
-    assert {info.signer_user_id for info in infos} == {
+    assert len(sigs) == 2
+    assert {sig.typ() for sig in sigs} == {"text"}
+    assert {sig.hash_alg() for sig in sigs} == {"sha256"}
+    assert {sig.signers_userid() for sig in sigs} == {
         "patrice.lumumba@example.net",
         "steve.biko@example.net",
     }
-    assert all(info.is_one_pass is False for info in infos)
 
-    rsa_index = signature_index_for_key_id(infos, rsa_public_key.key_id)
-    ed_index = signature_index_for_key_id(infos, ed_public_key.key_id)
+    rsa_index = signature_index_for_key_id(sigs, rsa_public_key.key_id)
+    ed_index = signature_index_for_key_id(sigs, ed_public_key.key_id)
 
-    assert message.verify_signature(rsa_public_key, rsa_index).issuer_key_ids == [
+    assert message.verify_signature(rsa_public_key, rsa_index).issuer_key_id() == [
         rsa_public_key.key_id
     ]
-    assert message.verify_signature(ed_public_key, ed_index).issuer_key_ids == [
+    assert message.verify_signature(ed_public_key, ed_index).issuer_key_id() == [
         ed_public_key.key_id
     ]
-    assert message.verify_signature(rsa_public_key).issuer_key_ids == [
+    assert message.verify_signature(rsa_public_key).issuer_key_id() == [
         rsa_public_key.key_id
     ]
 
 
 def test_rfc9580_v6_cleartext_signature_info_exposes_salt() -> None:
-    secret_key, _ = SecretKey.from_armor(
+    secret_key, _ = SignedSecretKey.from_armor(
         read_fixture_text("rfc9580-v6-25519-annex-a-4/tsk.asc")
     )
     public_key = secret_key.to_public_key()
@@ -1276,11 +1632,12 @@ def test_rfc9580_v6_cleartext_signature_info_exposes_salt() -> None:
     assert message.signature_count() == 1
 
     info = message.verify_signature(public_key)
-    assert info.version == 6
-    assert info.signature_type == "text"
-    assert info.hash_algorithm == "SHA512"
-    assert info.issuer_fingerprints == [public_key.fingerprint]
-    assert info.salt is not None
-    assert len(info.salt) == 32
-    assert info.signed_hash_value is not None
-    assert message.signature_infos()[0].salt == info.salt
+    assert info.version() == 6
+    assert info.typ() == "text"
+    assert info.hash_alg() == "sha512"
+    assert info.issuer_fingerprint() == [public_key.fingerprint]
+    salt = info.salt()
+    assert salt is not None
+    assert len(salt) == 32
+    assert info.signed_hash_value() is not None
+    assert message.signatures()[0].salt() == salt

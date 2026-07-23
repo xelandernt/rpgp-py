@@ -209,3 +209,7 @@ __marimo__/
 
 # Other
 *.dSYM
+*.DS_Store
+
+# Agents
+.agents

@@ -1,4 +1,4 @@
-use crate::key_params::*;
+use crate::types::*;
 use crate::*;
 
 pub(crate) fn exact_or_random_array<const N: usize>(
@@ -126,10 +126,10 @@ pub(crate) struct KeyPacketVersions {
 }
 
 pub(crate) fn apply_generated_key_packet_versions(
-    key: SignedSecretKey,
+    key: PgpSignedSecretKey,
     packet_versions: &KeyPacketVersions,
-) -> PyResult<SignedSecretKey> {
-    let SignedSecretKey {
+) -> PyResult<PgpSignedSecretKey> {
+    let PgpSignedSecretKey {
         primary_key,
         details,
         public_subkeys,
@@ -154,7 +154,7 @@ pub(crate) fn apply_generated_key_packet_versions(
         })
         .collect::<PyResult<Vec<_>>>()?;
 
-    Ok(SignedSecretKey {
+    Ok(PgpSignedSecretKey {
         primary_key,
         details,
         public_subkeys,
